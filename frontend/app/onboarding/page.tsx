@@ -78,58 +78,132 @@ const inputClass =
   "block w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
 const labelClass = "block text-sm font-medium text-gray-700 mb-1";
 
-// ─── Step 1 — Company Setup ───────────────────────────────────────────────────
+// ─── Step 1 — Profile + Company Setup ────────────────────────────────────────
 
 interface Step1Props {
+  firstName: string;
+  setFirstName: (v: string) => void;
+  lastName: string;
+  setLastName: (v: string) => void;
+  email: string;
+  setEmail: (v: string) => void;
+  phone: string;
+  setPhone: (v: string) => void;
   companyName: string;
   setCompanyName: (v: string) => void;
   timezone: string;
   setTimezone: (v: string) => void;
-  emails: string[];
-  setEmails: (v: string[]) => void;
   onContinue: () => void;
 }
 
 function Step1({
+  firstName,
+  setFirstName,
+  lastName,
+  setLastName,
+  email,
+  setEmail,
+  phone,
+  setPhone,
   companyName,
   setCompanyName,
   timezone,
   setTimezone,
-  emails,
-  setEmails,
   onContinue,
 }: Step1Props) {
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   function handleContinue() {
-    if (!companyName.trim()) {
-      setError("Company name is required.");
+    const next: Record<string, string> = {};
+    if (!firstName.trim()) next.firstName = "First name is required.";
+    if (!lastName.trim()) next.lastName = "Last name is required.";
+    if (!email.trim()) next.email = "Email is required.";
+    if (!phone.trim()) next.phone = "Phone number is required.";
+    if (!companyName.trim()) next.companyName = "Company name is required.";
+    if (Object.keys(next).length) {
+      setErrors(next);
       return;
     }
-    setError(null);
-    // TODO: call api.updateOrganization({ name: companyName }) once that method
-    // is added to api-client.ts — the org was already created at login via WorkOS.
+    setErrors({});
     onContinue();
-  }
-
-  function addEmail() {
-    if (emails.length < 4) setEmails([...emails, ""]);
-  }
-
-  function setEmail(i: number, val: string) {
-    const next = [...emails];
-    next[i] = val;
-    setEmails(next);
   }
 
   return (
     <div className="space-y-5">
       <div>
-        <Title>Set up your company</Title>
+        <Title>Your profile &amp; company</Title>
         <Text className="mt-1 text-gray-500">
-          Tell us a bit about your organization before we connect your first
-          location.
+          Tell us about yourself and your organization.
         </Text>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label htmlFor="first-name" className={labelClass}>
+            First name <span className="text-red-500">*</span>
+          </label>
+          <input
+            id="first-name"
+            type="text"
+            value={firstName}
+            onChange={(e) => setFirstName(e.target.value)}
+            placeholder="Jane"
+            className={inputClass}
+          />
+          {errors.firstName && (
+            <Text className="mt-1 text-xs text-red-600">{errors.firstName}</Text>
+          )}
+        </div>
+        <div>
+          <label htmlFor="last-name" className={labelClass}>
+            Last name <span className="text-red-500">*</span>
+          </label>
+          <input
+            id="last-name"
+            type="text"
+            value={lastName}
+            onChange={(e) => setLastName(e.target.value)}
+            placeholder="Smith"
+            className={inputClass}
+          />
+          {errors.lastName && (
+            <Text className="mt-1 text-xs text-red-600">{errors.lastName}</Text>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <label htmlFor="email" className={labelClass}>
+          Email <span className="text-red-500">*</span>
+        </label>
+        <input
+          id="email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="jane@apexroofing.com"
+          className={inputClass}
+        />
+        {errors.email && (
+          <Text className="mt-1 text-xs text-red-600">{errors.email}</Text>
+        )}
+      </div>
+
+      <div>
+        <label htmlFor="phone" className={labelClass}>
+          Phone <span className="text-red-500">*</span>
+        </label>
+        <input
+          id="phone"
+          type="tel"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          placeholder="(555) 000-0000"
+          className={inputClass}
+        />
+        {errors.phone && (
+          <Text className="mt-1 text-xs text-red-600">{errors.phone}</Text>
+        )}
       </div>
 
       <div>
@@ -144,8 +218,8 @@ function Step1({
           placeholder="e.g. Apex Roofing Group"
           className={inputClass}
         />
-        {error && (
-          <Text className="mt-1 text-sm text-red-600">{error}</Text>
+        {errors.companyName && (
+          <Text className="mt-1 text-xs text-red-600">{errors.companyName}</Text>
         )}
       </div>
 
@@ -167,35 +241,6 @@ function Step1({
         </select>
       </div>
 
-      <div className="space-y-2">
-        <label className={labelClass}>
-          Invite teammates{" "}
-          <span className="text-gray-400 font-normal">(optional)</span>
-        </label>
-        {emails.map((email, i) => (
-          <input
-            key={i}
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(i, e.target.value)}
-            placeholder={`teammate${i + 1}@company.com`}
-            className={inputClass}
-          />
-        ))}
-        {emails.length < 4 && (
-          <button
-            type="button"
-            onClick={addEmail}
-            className="text-sm text-blue-600 hover:text-blue-800"
-          >
-            + Add another
-          </button>
-        )}
-        <Text className="text-xs text-gray-400">
-          Up to 4 teammates. Invites will be sent once setup is complete.
-        </Text>
-      </div>
-
       <button
         onClick={handleContinue}
         className="w-full rounded bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
@@ -211,10 +256,11 @@ function Step1({
 interface Step2Props {
   org: Organization | null;
   onSuccess: (locationId: string) => void;
+  onSkip: () => void;
   onBack: () => void;
 }
 
-function Step2({ org, onSuccess, onBack }: Step2Props) {
+function Step2({ org, onSuccess, onSkip, onBack }: Step2Props) {
   const [locName, setLocName] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
@@ -224,8 +270,8 @@ function Step2({ org, onSuccess, onBack }: Step2Props) {
   const [error, setError] = useState<string | null>(null);
 
   async function handleConnect() {
-    if (!locName.trim() || !apiKey.trim()) {
-      setError("Location name and AccuLynx API key are required.");
+    if (!locName.trim()) {
+      setError("Location name is required to save an AccuLynx integration.");
       return;
     }
     if (!org) {
@@ -270,10 +316,10 @@ function Step2({ org, onSuccess, onBack }: Step2Props) {
         >
           ← Back
         </button>
-        <Title>Connect your first location</Title>
+        <Title>Connect AccuLynx <span className="text-gray-400 text-base font-normal">(optional)</span></Title>
         <Text className="mt-1 text-gray-500">
-          Each roofing branch has its own AccuLynx API key. Add your first one
-          now.
+          If you use AccuLynx, add your first location now. You can skip this
+          and connect later in Settings.
         </Text>
       </div>
 
@@ -299,7 +345,7 @@ function Step2({ org, onSuccess, onBack }: Step2Props) {
 
       <div>
         <label htmlFor="acculynx-key" className={labelClass}>
-          AccuLynx API key <span className="text-red-500">*</span>
+          AccuLynx API key
         </label>
         <div className="relative">
           <input
@@ -362,6 +408,16 @@ function Step2({ org, onSuccess, onBack }: Step2Props) {
       >
         {loading ? "Connecting..." : "Connect Location"}
       </button>
+
+      <div className="text-center">
+        <button
+          type="button"
+          onClick={onSkip}
+          className="text-sm text-gray-500 hover:text-gray-700"
+        >
+          Skip — I don&apos;t use AccuLynx →
+        </button>
+      </div>
     </div>
   );
 }
@@ -817,9 +873,14 @@ function Step5({ pricingMode, onBack }: Step5Props) {
 export default function OnboardingPage() {
   const [step, setStep] = useState<OnboardingStep>(1);
   const [pricingMode, setPricingMode] = useState<PricingMode>(null);
+  // Step 1 — profile + company
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [timezone, setTimezone] = useState("America/Chicago");
-  const [emails, setEmails] = useState<string[]>([""]);
+  // Step 2 — location
   const [locationId, setLocationId] = useState<string | null>(null);
   const [org, setOrg] = useState<Organization | null>(null);
 
@@ -848,12 +909,18 @@ export default function OnboardingPage() {
         <Card>
           {step === 1 && (
             <Step1
+              firstName={firstName}
+              setFirstName={setFirstName}
+              lastName={lastName}
+              setLastName={setLastName}
+              email={email}
+              setEmail={setEmail}
+              phone={phone}
+              setPhone={setPhone}
               companyName={companyName}
               setCompanyName={setCompanyName}
               timezone={timezone}
               setTimezone={setTimezone}
-              emails={emails}
-              setEmails={setEmails}
               onContinue={() => setStep(2)}
             />
           )}
@@ -864,6 +931,7 @@ export default function OnboardingPage() {
                 setLocationId(id);
                 setStep(3);
               }}
+              onSkip={() => setStep(3)}
               onBack={() => setStep(1)}
             />
           )}
