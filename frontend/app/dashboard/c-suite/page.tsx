@@ -27,7 +27,7 @@ function formatCurrency(val: number): string {
   }).format(val);
 }
 
-function usageBarColor(used: number, max: number): string {
+function usageBarColor(used: number, max: number): "red" | "amber" | "gray" {
   const pct = max > 0 ? (used / max) * 100 : 0;
   if (pct >= 95) return "red";
   if (pct >= 80) return "amber";

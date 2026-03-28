@@ -8,14 +8,14 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
 
-[tool.hatch.build.targets.wheel]
-# force-include maps the contents of shared/ into the shared/ namespace in the wheel
-# so `from shared.models.acculynx import X` and `from shared.constants import Y` work
-[tool.hatch.build.targets.wheel.force-include]
-"." = "shared/"
+[tool.setuptools]
+# Maps the Python package name "shared" to the current directory (shared/).
+# This makes `from shared.constants import X` and `from shared.models.acculynx import Y` work.
+package-dir = {"shared" = "."}
+packages = ["shared", "shared.models"]
 
 [tool.ruff]
 target-version = "py311"
