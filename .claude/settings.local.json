@@ -43,7 +43,15 @@
       "Bash(brew --version)",
       "Bash(npm --version)",
       "Bash(docker info:*)",
-      "Bash(brew install:*)"
+      "Bash(brew install:*)",
+      "Bash(npm install:*)",
+      "Bash(python3.11 --version)",
+      "Bash(tmux -V)",
+      "Bash(gh --version)",
+      "Bash(python3.11 -m venv .venv)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(pip install:*)",
+      "Bash(python -c \"import fastapi, celery, anthropic, supabase, sentry_sdk; print\\(''All core imports ✅''\\)\")"
     ]
   }
 }

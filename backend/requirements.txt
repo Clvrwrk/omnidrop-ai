@@ -29,5 +29,5 @@ unstructured-client>=0.25.0
 # Error tracking — Sentry (captures 429s from AccuLynx + FastAPI errors)
 sentry-sdk[fastapi]>=2.0.0
 
-# Shared package (install from local path)
--e ../shared
+# Shared package (install from local path — run from repo root, not backend/)
+# pip install -e ./shared && pip install -r backend/requirements.txt
