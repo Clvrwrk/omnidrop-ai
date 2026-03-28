@@ -1,10 +1,11 @@
 """
 OmniDrop AI — Claude Service (Anthropic API)
 
-Provides three capabilities:
+Provides four capabilities:
   1. Triage: Classify document type (structured vs. unstructured)
   2. Extraction: Extract strict JSON schema from structured documents (Invoices/Proposals)
   3. Chunking: Prepare unstructured documents for RAG (MSDS/Manuals)
+  4. Analytics: Text-to-SQL agent for C-Suite natural language queries
 
 The input to all methods is plain text produced by UnstructuredService.elements_to_text().
 
@@ -14,6 +15,7 @@ Model: claude-opus-4-6 — non-negotiable per CLAUDE.md
 
 import json
 import logging
+import re
 from typing import Any, Literal
 
 import anthropic
@@ -182,6 +184,93 @@ class ClaudeService:
                     return False
 
         return True
+
+    # ── Text-to-SQL Analytics Agent ──────────────────────────────────────────
+
+    # Schema description provided to Claude for SQL generation
+    _ANALYTICS_SCHEMA = """
+Tables available (PostgreSQL + Supabase):
+
+jobs (job_id UUID PK, location_id UUID FK, status TEXT ['queued','processing','complete','failed'], file_name TEXT, error_message TEXT, created_at TIMESTAMPTZ, completed_at TIMESTAMPTZ)
+
+documents (document_id UUID PK, job_id UUID FK, location_id UUID FK, document_type TEXT ['invoice','proposal','po','msds','manual','warranty','unknown'], raw_path TEXT, triage_status TEXT ['pending','confirmed','rejected'], created_at TIMESTAMPTZ)
+
+invoices (invoice_id UUID PK, document_id UUID FK UNIQUE, location_id UUID FK, vendor_name TEXT, invoice_number TEXT, invoice_date DATE, due_date DATE, subtotal NUMERIC(12,2), tax NUMERIC(12,2), total NUMERIC(12,2), notes TEXT, extraction_meta JSONB, created_at TIMESTAMPTZ)
+
+line_items (line_item_id UUID PK, invoice_id UUID FK, description TEXT, quantity NUMERIC(12,4), unit_price NUMERIC(12,2), amount NUMERIC(12,2), sort_order INTEGER)
+
+locations (location_id UUID PK, user_id TEXT, name TEXT, acculynx_api_key TEXT, connection_status TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ)
+"""
+
+    @staticmethod
+    def analytics_agent(query: str, location_id: str) -> dict[str, Any]:
+        """
+        Text-to-SQL analytics agent. Accepts a natural language query,
+        returns a parameterized SELECT statement scoped to the given location.
+
+        Returns:
+            {"sql": str, "params": list, "explanation": str}
+
+        Raises:
+            ValueError: If Claude returns a non-SELECT statement.
+        """
+        logger.info("analytics_agent called", extra={"location_id": location_id})
+
+        client = _get_client()
+        message = client.messages.create(
+            model=ClaudeService.MODEL,
+            max_tokens=1024,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "You are a SQL analyst for a roofing document management system.\n"
+                        "Generate a PostgreSQL SELECT query to answer the user's question.\n\n"
+                        "RULES:\n"
+                        "- Return ONLY valid JSON: {\"sql\": \"SELECT ...\", \"params\": [...], \"explanation\": \"...\"}\n"
+                        "- ONLY SELECT statements — never INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, or any DDL/DML\n"
+                        "- The query MUST include a WHERE clause filtering by location_id = $1\n"
+                        "- Use $1, $2, $3... for parameter placeholders (PostgreSQL style)\n"
+                        "- $1 is always the location_id parameter — do not use it for anything else\n"
+                        "- Additional user-supplied filter values go in $2, $3, etc.\n"
+                        "- Use table and column names exactly as shown in the schema\n"
+                        "- Keep queries simple and efficient\n\n"
+                        f"SCHEMA:\n{ClaudeService._ANALYTICS_SCHEMA}\n\n"
+                        f"USER QUESTION: {query}"
+                    ),
+                }
+            ],
+        )
+
+        raw = message.content[0].text.strip()
+        # Strip markdown code fences if Claude wraps the response
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        result = json.loads(raw.strip())
+
+        sql = result.get("sql", "").strip()
+        params = result.get("params", [])
+        explanation = result.get("explanation", "")
+
+        # Strict validation: must be a SELECT statement
+        normalized = re.sub(r"\s+", " ", sql).strip().upper()
+        if not normalized.startswith("SELECT"):
+            raise ValueError(f"Analytics agent returned non-SELECT statement: {sql[:100]}")
+
+        # Reject any dangerous keywords that shouldn't appear in a read-only query
+        _FORBIDDEN = {"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE", "GRANT", "REVOKE"}
+        # Check tokens in the normalized SQL (split on whitespace and common delimiters)
+        sql_tokens = set(re.findall(r"[A-Z_]+", normalized))
+        violations = sql_tokens & _FORBIDDEN
+        if violations:
+            raise ValueError(f"Analytics agent SQL contains forbidden keywords: {violations}")
+
+        # Ensure location_id is always the first parameter
+        params = [location_id] + list(params)
+
+        return {"sql": sql, "params": params, "explanation": explanation}
 
     # voyage-3 outputs 1024-dimensional vectors
     EMBEDDING_MODEL = "voyage-3"

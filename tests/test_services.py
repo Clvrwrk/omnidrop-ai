@@ -239,9 +239,9 @@ class TestShouldAutoConfirm:
         }
         assert ClaudeService.should_auto_confirm(extraction) is True
 
-    def test_empty_extraction_returns_true(self):
-        """No fields to check → vacuously true (edge case)."""
-        assert ClaudeService.should_auto_confirm({}) is True
+    def test_empty_extraction_returns_false(self):
+        """Empty extraction has 0.0 confidence on all fields → should not auto-confirm."""
+        assert ClaudeService.should_auto_confirm({}) is False
 
 
 # ─── ClaudeService — chunk_for_rag ────────────────────────────────────────────
