@@ -37,12 +37,12 @@ services:
       - key: CELERY_BROKER_URL
         fromService:
           name: omnidrop-redis
-          type: keyValue
+          type: redis
           property: connectionString
       - key: CELERY_RESULT_BACKEND
         fromService:
           name: omnidrop-redis
-          type: keyValue
+          type: redis
           property: connectionString
       # Secrets — set in Render dashboard → Environment Groups → omnidrop-secrets
       - fromGroup: omnidrop-secrets
@@ -69,12 +69,12 @@ services:
       - key: CELERY_BROKER_URL
         fromService:
           name: omnidrop-redis
-          type: keyValue
+          type: redis
           property: connectionString
       - key: CELERY_RESULT_BACKEND
         fromService:
           name: omnidrop-redis
-          type: keyValue
+          type: redis
           property: connectionString
       - fromGroup: omnidrop-secrets
 
@@ -83,7 +83,7 @@ services:
   #    Acts as both the Celery task broker and result backend.
   #    maxmemoryPolicy: noeviction ensures queued tasks are never silently dropped.
   # ---------------------------------------------------------------------------
-  - type: keyValue
+  - type: redis
     name: omnidrop-redis
     region: oregon
     plan: starter
@@ -118,7 +118,7 @@ services:
       - key: CELERY_BROKER_URL
         fromService:
           name: omnidrop-redis
-          type: keyValue
+          type: redis
           property: connectionString
 
 # =============================================================================
