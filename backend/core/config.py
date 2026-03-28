@@ -27,8 +27,9 @@ class Settings(BaseSettings):
     # Anthropic (default model: claude-opus-4-6)
     anthropic_api_key: str = Field(..., validation_alias="ANTHROPIC_API_KEY")
 
-    # AccuLynx
-    acculynx_api_key: str = Field(..., validation_alias="ACCULYNX_API_KEY")
+    # AccuLynx — NO global API key in production. Each location has its own key
+    # stored in Supabase. This env var is for admin/testing only.
+    acculynx_api_key: str | None = Field(default=None, validation_alias="ACCULYNX_API_KEY")
     # Used by Hookdeck to validate events from AccuLynx before forwarding
     hookdeck_signing_secret: str = Field(..., validation_alias="HOOKDECK_SIGNING_SECRET")
 
@@ -48,6 +49,9 @@ class Settings(BaseSettings):
     # Unstructured.io (Omni-Parser)
     unstructured_api_key: str = Field(..., validation_alias="UNSTRUCTURED_API_KEY")
 
+    # Voyage AI (embeddings for RAG — voyage-3 outputs 1024-dim vectors)
+    voyage_api_key: str = Field(..., validation_alias="VOYAGE_API_KEY")
+
     # Sentry — optional, disabled if DSN is not set
     sentry_python_dsn: str | None = Field(default=None, validation_alias="SENTRY_PYTHON_DSN")
     sentry_traces_sample_rate: float = Field(
@@ -64,7 +68,7 @@ class Settings(BaseSettings):
         }
         return origins.get(self.app_env, ["http://localhost:3000"])
 
-    model_config = {"env_file": ".env", "case_sensitive": False}
+    model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore"}
 
 
 @lru_cache

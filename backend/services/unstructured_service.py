@@ -19,17 +19,24 @@ Output element types relevant to roofing docs:
 """
 
 import logging
-import os
 from typing import Any
+
+from unstructured_client import UnstructuredClient
+from unstructured_client.models import operations, shared
+
+from backend.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+_client: UnstructuredClient | None = None
 
-def _get_client() -> Any:
-    """Returns an initialized UnstructuredClient using UNSTRUCTURED_API_KEY."""
-    from unstructured_client import UnstructuredClient
 
-    return UnstructuredClient(api_key_auth=os.environ["UNSTRUCTURED_API_KEY"])
+def _get_client() -> UnstructuredClient:
+    """Returns a singleton UnstructuredClient using UNSTRUCTURED_API_KEY."""
+    global _client
+    if _client is None:
+        _client = UnstructuredClient(api_key_auth=settings.unstructured_api_key)
+    return _client
 
 
 class UnstructuredService:
@@ -42,16 +49,18 @@ class UnstructuredService:
     def partition_document(
         file_bytes: bytes,
         filename: str,
-        strategy: str = "auto",
+        document_type_hint: str = "unknown",
     ) -> list[dict[str, Any]]:
         """
         Partition a document into structured elements using Unstructured.io.
 
         Args:
-            file_bytes: Raw bytes of the document (PDF, DOCX, XLSX, etc.)
-            filename:   Original filename — used to infer file type.
-            strategy:   Parsing strategy: "auto" | "hi_res" | "fast" | "ocr_only"
-                        Use "hi_res" for invoices/MSDS, "fast" for clean text PDFs.
+            file_bytes:         Raw bytes of the document (PDF, DOCX, XLSX, etc.)
+            filename:           Original filename — used to infer file type.
+            document_type_hint: Hint for strategy selection:
+                                "invoice", "msds" → hi_res
+                                "proposal", "manual", "warranty" → fast
+                                "unknown" → auto
 
         Returns:
             List of element dicts, each containing:
@@ -60,38 +69,52 @@ class UnstructuredService:
                 "text": "...",
                 "metadata": {"page_number": int, "filename": str, ...}
             }
-
-        TODO:
-            1. Confirm API key access at https://app.unstructured.io/
-            2. Test with a sample roofing invoice PDF
-            3. Tune strategy per document type (see triage_document task)
         """
-        import io
+        strategy = UnstructuredService._select_strategy(filename, document_type_hint)
+        logger.info(
+            "partition_document called",
+            extra={"filename": filename, "strategy": strategy, "size_bytes": len(file_bytes)},
+        )
 
-        from unstructured_client.models.shared import Files, PartitionParameters
+        client = _get_client()
+        response = client.general.partition(
+            request=operations.PartitionRequest(
+                partition_parameters=shared.PartitionParameters(
+                    files=shared.Files(content=file_bytes, file_name=filename),
+                    strategy=strategy,
+                    languages=["eng"],
+                    extract_image_block_types=["Image", "Table"],
+                )
+            )
+        )
 
-        logger.info("partition_document called", extra={"filename": filename, "strategy": strategy})
+        elements = [el.to_dict() for el in response.elements]
+        logger.info(
+            "partition_document complete",
+            extra={"filename": filename, "element_count": len(elements)},
+        )
+        return elements
 
-        # TODO: Implement
-        # client = _get_client()
-        # files = Files(content=file_bytes, file_name=filename)
-        # params = PartitionParameters(
-        #     files=files,
-        #     strategy=strategy,
-        #     languages=["eng"],
-        #     split_pdf_page=True,
-        #     split_pdf_concurrency_level=5,
-        # )
-        # response = client.general.partition(request=params)
-        # return [element.to_dict() for element in response.elements or []]
+    @staticmethod
+    def _select_strategy(filename: str, type_hint: str) -> str:
+        """
+        Select Unstructured.io parsing strategy based on document type hint.
 
-        raise NotImplementedError("partition_document not yet implemented")
+        hi_res: scanned/image PDFs requiring OCR — invoices, MSDS sheets
+        fast:   digital text PDFs — proposals, manuals, warranties
+        auto:   unknown — Unstructured picks best strategy
+        """
+        if type_hint in ("invoice", "msds"):
+            return "hi_res"
+        if type_hint in ("proposal", "manual", "warranty"):
+            return "fast"
+        return "auto"
 
     @staticmethod
     def elements_to_text(elements: list[dict[str, Any]]) -> str:
         """
         Concatenates element text into a single string for Claude consumption.
-        Tables are formatted as pipe-delimited text.
+        Filters out empty elements.
         """
         lines = []
         for el in elements:

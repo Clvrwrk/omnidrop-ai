@@ -1,9 +1,32 @@
-from shared.models.acculynx import AccuLynxWebhookPayload, AccuLynxJobEvent
-from shared.models.jobs import IntakeJobInput, IntakeJobResult
+from shared.models.acculynx import AccuLynxJobEvent, AccuLynxWebhookPayload
+from shared.models.jobs import (
+    CeleryJobPayload,
+    ConfidenceField,
+    DocumentType,
+    ExtractionWithConfidence,
+    InvoiceExtraction,
+    InvoiceLineItem,
+    JobStatus,
+    LineItemConfidence,
+    ProcessedDocumentResult,
+    TriageCategory,
+    TriagedDocumentResult,
+    TriageStatus,
+)
 
 __all__ = [
-    "AccuLynxWebhookPayload",
     "AccuLynxJobEvent",
-    "IntakeJobInput",
-    "IntakeJobResult",
+    "AccuLynxWebhookPayload",
+    "CeleryJobPayload",
+    "ConfidenceField",
+    "DocumentType",
+    "ExtractionWithConfidence",
+    "InvoiceExtraction",
+    "InvoiceLineItem",
+    "JobStatus",
+    "LineItemConfidence",
+    "ProcessedDocumentResult",
+    "TriageCategory",
+    "TriagedDocumentResult",
+    "TriageStatus",
 ]

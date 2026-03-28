@@ -29,5 +29,11 @@ unstructured-client>=0.25.0
 # Error tracking — Sentry (captures 429s from AccuLynx + FastAPI errors)
 sentry-sdk[fastapi]>=2.0.0
 
+# Embeddings — Voyage AI (voyage-3, 1024-dim vectors for pgvector)
+voyageai>=0.3.0
+
+# Multipart form data (required by FastAPI for file upload endpoint)
+python-multipart>=0.0.9
+
 # Shared package (install from local path — run from repo root, not backend/)
 # pip install -e ./shared && pip install -r backend/requirements.txt

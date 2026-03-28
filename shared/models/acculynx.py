@@ -1,6 +1,6 @@
 """
 AccuLynx webhook payload models.
-These are used by the FastAPI webhook endpoint AND Temporal workflow inputs.
+Used by the FastAPI webhook endpoint and Celery task inputs.
 """
 
 from datetime import datetime
@@ -14,14 +14,17 @@ class AccuLynxJobEvent(BaseModel):
 
     event_type: str = Field(..., description="e.g. 'job.created', 'document.uploaded'")
     job_id: str = Field(..., description="AccuLynx job ID")
+    location_id: str = Field(..., description="AccuLynx location ID — maps to Supabase locations table")
     timestamp: datetime = Field(..., description="When the event occurred")
+    document_id: str | None = Field(default=None, description="AccuLynx document ID, if applicable")
+    document_url: str | None = Field(default=None, description="Direct URL to fetch document bytes")
     data: dict[str, Any] = Field(default_factory=dict, description="Event-specific payload")
 
 
 class AccuLynxWebhookPayload(BaseModel):
     """
-    Top-level AccuLynx webhook payload.
-    TODO: Expand fields once AccuLynx webhook documentation is confirmed.
+    Top-level AccuLynx webhook payload as delivered by Hookdeck.
+    Hookdeck re-signs and forwards the original AccuLynx event.
     """
 
     event: AccuLynxJobEvent
