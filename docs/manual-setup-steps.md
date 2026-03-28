@@ -17,7 +17,7 @@
 | npm dependencies installed (`frontend/`) | ✅ Done |
 | Python venv created + backend deps installed (`.venv/`) | ✅ Done |
 | 3 Supabase projects provisioned (dev/sandbox/prod) | ✅ Done |
-| All env files populated (except service role keys) | ✅ Done |
+| All env files fully populated (incl. service role keys) | ✅ Done |
 | Agent team skills configured | ✅ Done |
 
 ---
@@ -30,8 +30,8 @@ For each project, go to: **app.supabase.com → [project] → Project Settings �
 
 | Project | Dashboard URL | Paste into |
 |---|---|---|
-| omnidrop-dev | app.supabase.com → omnidrop-dev | `.env` and `.env.dev` — `SUPABASE_SERVICE_ROLE_KEY=` |
-| omnidrop-sandbox | app.supabase.com → omnidrop-sandbox | `.env.sandbox` — `SUPABASE_SERVICE_ROLE_KEY=` |
+| omnidrop-dev | app.supabase.com → omnidrop-dev | ✅ Done — already in `.env` and `.env.dev` |
+| omnidrop-sandbox | app.supabase.com → omnidrop-sandbox | ✅ Done — already in `.env.sandbox` |
 | omnidrop-prod | app.supabase.com → omnidrop-prod | Render env group (Step 5) |
 
 ---
