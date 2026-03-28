@@ -1,6 +1,6 @@
 import { authkitMiddleware } from "@workos-inc/authkit-nextjs";
 
-export default authkitMiddleware();
+export default authkitMiddleware({ ensureSignedIn: true });
 
 export const config = {
   /*
@@ -11,6 +11,6 @@ export const config = {
    * - /favicon.ico, /robots.txt
    */
   matcher: [
-    "/((?!callback|api/v1/webhooks|_next/static|_next/image|favicon.ico|robots.txt).*)",
+    "/((?!callback|api/auth/sign-out|api/v1/webhooks|_next/static|_next/image|favicon.ico|robots.txt).*)",
   ],
 };

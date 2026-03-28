@@ -23,6 +23,15 @@ import type {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
+// Module-level auth context — set once after login via setAuthContext()
+let _workosOrgId: string | null = null;
+let _workosOrgName: string | null = null;
+
+export function setAuthContext(workosOrgId: string, orgName: string) {
+  _workosOrgId = workosOrgId;
+  _workosOrgName = orgName;
+}
+
 class ApiError extends Error {
   constructor(
     public status: number,
@@ -38,9 +47,16 @@ async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
+  const authHeaders: Record<string, string> = {};
+  if (_workosOrgId) {
+    authHeaders["x-workos-org-id"] = _workosOrgId;
+    if (_workosOrgName) authHeaders["x-workos-org-name"] = _workosOrgName;
+  }
+
   const res = await fetch(`${API_BASE}${path}`, {
     headers: {
       "Content-Type": "application/json",
+      ...authHeaders,
       ...options.headers,
     },
     ...options,
