@@ -835,6 +835,12 @@ export default function OnboardingPage() {
           <Text className="mt-1 text-sm text-gray-500">
             Let&apos;s get you set up in 5 steps
           </Text>
+          <a
+            href="/dashboard"
+            className="mt-3 inline-block text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2"
+          >
+            Already set up? Go to dashboard →
+          </a>
         </div>
 
         <StepIndicator current={step} />
