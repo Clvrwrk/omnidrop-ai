@@ -32,15 +32,17 @@ services:
     envVars:
       - key: APP_ENV
         value: dev
+      - key: PYTHON_VERSION
+        value: "3.11.0"
       - key: CELERY_BROKER_URL
         fromService:
           name: omnidrop-redis
-          type: redis
+          type: keyValue
           property: connectionString
       - key: CELERY_RESULT_BACKEND
         fromService:
           name: omnidrop-redis
-          type: redis
+          type: keyValue
           property: connectionString
       # Secrets — set in Render dashboard → Environment Groups → omnidrop-secrets
       - fromGroup: omnidrop-secrets
@@ -62,15 +64,17 @@ services:
     envVars:
       - key: APP_ENV
         value: dev
+      - key: PYTHON_VERSION
+        value: "3.11.0"
       - key: CELERY_BROKER_URL
         fromService:
           name: omnidrop-redis
-          type: redis
+          type: keyValue
           property: connectionString
       - key: CELERY_RESULT_BACKEND
         fromService:
           name: omnidrop-redis
-          type: redis
+          type: keyValue
           property: connectionString
       - fromGroup: omnidrop-secrets
 
@@ -79,7 +83,7 @@ services:
   #    Acts as both the Celery task broker and result backend.
   #    maxmemoryPolicy: noeviction ensures queued tasks are never silently dropped.
   # ---------------------------------------------------------------------------
-  - type: redis
+  - type: keyValue
     name: omnidrop-redis
     region: oregon
     plan: starter
@@ -130,10 +134,12 @@ services:
     startCommand: celery -A backend.workers.celery_app flower --loglevel=info
     autoDeploy: true
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
       - key: CELERY_BROKER_URL
         fromService:
           name: omnidrop-redis
-          type: redis
+          type: keyValue
           property: connectionString
 
 # =============================================================================
