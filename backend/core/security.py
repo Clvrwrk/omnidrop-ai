@@ -21,7 +21,7 @@ import logging
 
 from fastapi import HTTPException, Request, status
 
-from backend.core.config import get_settings
+import backend.core.config as _config
 from shared.constants import HOOKDECK_SIGNATURE_HEADER
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ async def verify_hookdeck_signature(request: Request) -> None:
         )
 
     raw_body = await request.body()
-    settings = get_settings()
+    settings = _config.get_settings()
     expected = hmac.new(
         settings.hookdeck_signing_secret.encode(),
         raw_body,

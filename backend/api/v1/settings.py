@@ -11,7 +11,7 @@ SECURITY: acculynx_api_key is NEVER returned in full — only last 4 chars.
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -20,6 +20,7 @@ router = APIRouter()
 class CreateLocationRequest(BaseModel):
     name: str
     acculynx_api_key: str
+    organization_id: str
 
 
 class UpdateLocationRequest(BaseModel):
@@ -28,19 +29,34 @@ class UpdateLocationRequest(BaseModel):
 
 
 @router.get("/settings/locations", summary="List user's registered locations")
-async def list_locations() -> dict:
-    """Returns locations with masked API keys. Placeholder."""
-    # TODO: Query Supabase locations table filtered by authenticated user_id
+async def list_locations(organization_id: str | None = None) -> dict:
+    """Returns locations with masked API keys. Filtered by organization_id when provided. Placeholder."""
+    # TODO: Query Supabase locations table filtered by organization_id and/or authenticated user_id
     return {"locations": []}
 
 
 @router.post("/settings/locations", status_code=201, summary="Register a new location")
 async def create_location(body: CreateLocationRequest) -> dict:
-    """Creates a new location with AccuLynx API key. Placeholder."""
-    # TODO: Insert into Supabase locations table
+    """Creates a new location with AccuLynx API key, scoped to an organization."""
+    from backend.services.supabase_client import get_organization_by_id, get_user_count_for_org
+
+    org = await get_organization_by_id(body.organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    user_count = await get_user_count_for_org(body.organization_id)
+    max_users = org.get("max_users", 5)
+    if user_count >= max_users:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Organization has reached its user limit ({max_users})",
+        )
+
+    # TODO: Insert into Supabase locations table with organization_id
     location_id = str(uuid4())
     return {
         "location_id": location_id,
+        "organization_id": body.organization_id,
         "name": body.name,
         "api_key_last4": body.acculynx_api_key[-4:],
         "connection_status": "untested",

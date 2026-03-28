@@ -44,12 +44,15 @@ Returns immediately — the frontend polls job status via `GET /api/v1/jobs/{job
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `file` | `File` | ✓ | PDF, image, spreadsheet |
-| `location_id` | `string (uuid)` | ✓ | Which AccuLynx location this file belongs to |
+| `organization_id` | `string (uuid)` | ✓ | The user's organization (tenant root) |
+| `location_id` | `string (uuid)` | — | Optional AccuLynx location; omit for org-level uploads |
 
 **Response `202 Accepted`:**
 ```json
 {
   "job_id": "uuid",
+  "organization_id": "uuid",
+  "location_id": "uuid | null",
   "status": "queued",
   "created_at": "ISO 8601"
 }
@@ -59,7 +62,54 @@ Returns immediately — the frontend polls job status via `GET /api/v1/jobs/{job
 
 ---
 
-### 1.2 Jobs
+### 1.2 Organizations
+
+#### `GET /api/v1/organizations/me`
+
+Returns the organization for the authenticated user. Creates the org row on first access
+(lazy provisioning from the WorkOS session's org_id and org_name).
+
+**Response `200`:**
+```json
+{
+  "organization_id": "uuid",
+  "workos_org_id": "string",
+  "name": "string",
+  "max_users": "integer",
+  "created_at": "ISO 8601"
+}
+```
+
+**Error:** `401` if no organization context in session.
+
+---
+
+#### `GET /api/v1/organizations/me/users`
+
+List users (via locations) in the authenticated organization. Used by `/settings` to
+show seat usage vs `max_users`.
+
+**Response `200`:**
+```json
+{
+  "organization_id": "uuid",
+  "max_users": "integer",
+  "user_count": "integer",
+  "users": [
+    {
+      "user_id": "string",
+      "name": "string",
+      "created_at": "ISO 8601"
+    }
+  ]
+}
+```
+
+**Error:** `401` missing org context, `404` organization not found.
+
+---
+
+### 1.3 Jobs
 
 #### `GET /api/v1/jobs`
 
@@ -80,8 +130,9 @@ List jobs for the authenticated user's locations. Used by `/dashboard` task stat
   "jobs": [
     {
       "job_id": "uuid",
-      "location_id": "uuid",
-      "location_name": "string",
+      "organization_id": "uuid",
+      "location_id": "uuid | null",
+      "location_name": "string | null",
       "status": "queued | processing | complete | failed",
       "document_type": "invoice | proposal | po | msds | manual | warranty | unknown | null",
       "file_name": "string | null",
@@ -106,8 +157,9 @@ Get full detail for a single job. Used by `/triage` to link to the source docume
 ```json
 {
   "job_id": "uuid",
-  "location_id": "uuid",
-  "location_name": "string",
+  "organization_id": "uuid",
+  "location_id": "uuid | null",
+  "location_name": "string | null",
   "status": "queued | processing | complete | failed",
   "document_type": "invoice | proposal | po | msds | manual | warranty | unknown | null",
   "file_name": "string | null",
@@ -388,12 +440,19 @@ Accountant submits corrections or confirms/rejects the extraction.
 
 List all locations registered by the authenticated user.
 
+**Query params:**
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `organization_id` | `string (uuid)` | — | Filter by organization |
+
 **Response `200`:**
 ```json
 {
   "locations": [
     {
       "location_id": "uuid",
+      "organization_id": "uuid",
       "name": "string",
       "api_key_last4": "string",
       "connection_status": "active | invalid | untested",
@@ -416,7 +475,8 @@ Register a new roofing location with its AccuLynx API key.
 ```json
 {
   "name": "string",
-  "acculynx_api_key": "string"
+  "acculynx_api_key": "string",
+  "organization_id": "string (uuid)"
 }
 ```
 
@@ -424,6 +484,7 @@ Register a new roofing location with its AccuLynx API key.
 ```json
 {
   "location_id": "uuid",
+  "organization_id": "uuid",
   "name": "string",
   "api_key_last4": "string",
   "connection_status": "untested",
@@ -497,6 +558,29 @@ This endpoint is **not** behind WorkOS auth (monitoring tools need it unauthenti
 Place in `frontend/lib/types.ts`. Import from `lib/api-client.ts`.
 
 ```typescript
+// ─── Organizations ───────────────────────────────────────────────────────────
+
+export interface Organization {
+  organization_id: string;
+  workos_org_id: string;
+  name: string;
+  max_users: number;
+  created_at: string;
+}
+
+export interface OrgUser {
+  user_id: string;
+  name: string;
+  created_at: string;
+}
+
+export interface OrgUsersResponse {
+  organization_id: string;
+  max_users: number;
+  user_count: number;
+  users: OrgUser[];
+}
+
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 
 export type JobStatus = "queued" | "processing" | "complete" | "failed";
@@ -513,8 +597,9 @@ export type DocumentType =
 
 export interface Job {
   job_id: string;
-  location_id: string;
-  location_name: string;
+  organization_id: string;
+  location_id: string | null;
+  location_name: string | null;
   status: JobStatus;
   document_type: DocumentType;
   file_name: string | null;
@@ -537,6 +622,8 @@ export interface JobListResponse {
 
 export interface UploadResponse {
   job_id: string;
+  organization_id: string;
+  location_id: string | null;
   status: "queued";
   created_at: string;
 }
@@ -707,6 +794,7 @@ export type ConnectionStatus = "active" | "invalid" | "untested";
 
 export interface Location {
   location_id: string;
+  organization_id: string;
   name: string;
   api_key_last4: string;
   connection_status: ConnectionStatus;
@@ -721,10 +809,12 @@ export interface LocationListResponse {
 export interface CreateLocationRequest {
   name: string;
   acculynx_api_key: string;
+  organization_id: string;
 }
 
 export interface CreateLocationResponse {
   location_id: string;
+  organization_id: string;
   name: string;
   api_key_last4: string;
   connection_status: "untested";
@@ -931,6 +1021,7 @@ ALTER TABLE document_embeddings ENABLE ROW LEVEL SECURITY;
 | Analytics CMD+K (§3.3) | `/analytics` | `GET /analytics/kpis`, `GET /analytics/vendor-spend` |
 | Semantic search (§3.3) | `/search` | `POST /search` |
 | HITL triage (§3.4) | `/triage` | `GET /triage`, `GET /triage/{id}`, `PATCH /triage/{id}` |
+| Organization (§3.5) | `/settings` | `GET /organizations/me`, `GET /organizations/me/users` |
 | Location settings (§3.5) | `/settings` | `GET /settings/locations`, `POST /settings/locations`, `PATCH /settings/locations/{id}`, `DELETE /settings/locations/{id}` |
 
 ---

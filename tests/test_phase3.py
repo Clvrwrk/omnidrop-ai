@@ -314,6 +314,7 @@ class TestExtractStructConfidence:
             asyncio.get_event_loop().run_until_complete(
                 _save_structured_extraction(
                     job_id="job-500",
+                    organization_id="org-400",
                     location_id="loc-600",
                     document_id="doc-700",
                     extraction=sample_extraction_high_confidence,

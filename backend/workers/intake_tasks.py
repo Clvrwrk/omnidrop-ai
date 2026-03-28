@@ -45,12 +45,22 @@ def process_document(self: Any, job_payload: dict[str, Any]) -> dict[str, Any]:
         ProcessedDocumentResult-shaped dict for triage_document.
     """
     job_id = job_payload.get("job_id", "unknown")
-    location_id = job_payload.get("location_id", "unknown")
-    logger.info("process_document started", extra={"job_id": job_id, "location_id": location_id})
+    location_id = job_payload.get("location_id")
+    organization_id = job_payload.get("organization_id")
+    logger.info("process_document started", extra={"job_id": job_id, "location_id": location_id, "organization_id": organization_id})
+
+    # Resolve organization_id from location_id if not provided
+    if not organization_id and location_id:
+        import asyncio
+        from backend.services.supabase_client import get_organization_id_for_location
+        organization_id = asyncio.get_event_loop().run_until_complete(
+            get_organization_id_for_location(location_id)
+        )
+        job_payload["organization_id"] = organization_id
 
     try:
         # TODO: Implementation by AI & QA Engineer
-        # 1. Fetch API key: await get_location_api_key(location_id)
+        # 1. Fetch API key: await get_location_api_key(location_id)  (only if location_id present)
         # 2. Fetch document bytes from AccuLynx API using that key
         # 3. Pass bytes to UnstructuredService.partition_document()
         # 4. Return ProcessedDocumentResult dict
@@ -87,7 +97,8 @@ def triage_document(self: Any, parsed_result: dict[str, Any]) -> dict[str, Any]:
     from backend.services.claude_service import ClaudeService
 
     job_id = parsed_result.get("job_id", "unknown")
-    location_id = parsed_result.get("location_id", "unknown")
+    location_id = parsed_result.get("location_id")
+    organization_id = parsed_result.get("organization_id", "unknown")
     logger.info("triage_document started", extra={"job_id": job_id})
 
     try:
@@ -96,6 +107,7 @@ def triage_document(self: Any, parsed_result: dict[str, Any]) -> dict[str, Any]:
 
         triaged_result = {
             "job_id": job_id,
+            "organization_id": organization_id,
             "location_id": location_id,
             "document_id": parsed_result.get("document_id"),
             "triage_category": triage_category,
@@ -150,7 +162,8 @@ def extract_struct(self: Any, triaged_result: dict[str, Any]) -> dict[str, Any]:
     from backend.services.claude_service import ClaudeService
 
     job_id = triaged_result.get("job_id", "unknown")
-    location_id = triaged_result.get("location_id", "unknown")
+    location_id = triaged_result.get("location_id")
+    organization_id = triaged_result.get("organization_id", "unknown")
     document_id = triaged_result.get("document_id")
     logger.info("extract_struct started", extra={"job_id": job_id})
 
@@ -168,6 +181,7 @@ def extract_struct(self: Any, triaged_result: dict[str, Any]) -> dict[str, Any]:
         asyncio.get_event_loop().run_until_complete(
             _save_structured_extraction(
                 job_id=job_id,
+                organization_id=organization_id,
                 location_id=location_id,
                 document_id=document_id,
                 extraction=extraction,
@@ -206,7 +220,8 @@ def chunk_and_embed(self: Any, triaged_result: dict[str, Any]) -> dict[str, Any]
     from backend.services.claude_service import ClaudeService
 
     job_id = triaged_result.get("job_id", "unknown")
-    location_id = triaged_result.get("location_id", "unknown")
+    location_id = triaged_result.get("location_id")
+    organization_id = triaged_result.get("organization_id", "unknown")
     document_id = triaged_result.get("document_id")
     logger.info("chunk_and_embed started", extra={"job_id": job_id})
 
@@ -216,8 +231,9 @@ def chunk_and_embed(self: Any, triaged_result: dict[str, Any]) -> dict[str, Any]
         # 1. Claude chunks + Voyage AI generates embeddings
         chunks = ClaudeService.chunk_for_rag(raw_text, document_id or job_id)
 
-        # 2. Add location_id to each chunk for RLS scoping
+        # 2. Add organization_id and location_id to each chunk for RLS scoping
         for chunk in chunks:
+            chunk["organization_id"] = organization_id
             chunk["location_id"] = location_id
 
         # 3. Upsert to Supabase document_embeddings table + update job status
@@ -257,7 +273,8 @@ async def _update_job_status(
 
 async def _save_structured_extraction(
     job_id: str,
-    location_id: str,
+    organization_id: str,
+    location_id: str | None,
     document_id: str | None,
     extraction: dict[str, Any],
     triage_status: str,
@@ -285,6 +302,7 @@ async def _save_structured_extraction(
     # Upsert invoice row
     invoice_data = {
         "document_id": document_id,
+        "organization_id": organization_id,
         "location_id": location_id,
         "vendor_name": _val(extraction.get("vendor_name")),
         "invoice_number": _val(extraction.get("invoice_number")),

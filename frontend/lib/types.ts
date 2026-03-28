@@ -1,3 +1,26 @@
+// ─── Organizations ───────────────────────────────────────────────────────────
+
+export interface Organization {
+  organization_id: string;
+  workos_org_id: string;
+  name: string;
+  max_users: number;
+  created_at: string;
+}
+
+export interface OrgUser {
+  user_id: string;
+  name: string;
+  created_at: string;
+}
+
+export interface OrgUsersResponse {
+  organization_id: string;
+  max_users: number;
+  user_count: number;
+  users: OrgUser[];
+}
+
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 
 export type JobStatus = "queued" | "processing" | "complete" | "failed";
@@ -14,8 +37,9 @@ export type DocumentType =
 
 export interface Job {
   job_id: string;
-  location_id: string;
-  location_name: string;
+  organization_id: string;
+  location_id: string | null;
+  location_name: string | null;
   status: JobStatus;
   document_type: DocumentType;
   file_name: string | null;
@@ -38,6 +62,8 @@ export interface JobListResponse {
 
 export interface UploadResponse {
   job_id: string;
+  organization_id: string;
+  location_id: string | null;
   status: "queued";
   created_at: string;
 }
@@ -208,6 +234,7 @@ export type ConnectionStatus = "active" | "invalid" | "untested";
 
 export interface Location {
   location_id: string;
+  organization_id: string;
   name: string;
   api_key_last4: string;
   connection_status: ConnectionStatus;
@@ -222,10 +249,12 @@ export interface LocationListResponse {
 export interface CreateLocationRequest {
   name: string;
   acculynx_api_key: string;
+  organization_id: string;
 }
 
 export interface CreateLocationResponse {
   location_id: string;
+  organization_id: string;
   name: string;
   api_key_last4: string;
   connection_status: "untested";

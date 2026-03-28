@@ -1,4 +1,6 @@
 import type {
+  Organization,
+  OrgUsersResponse,
   JobListResponse,
   JobDetail,
   UploadResponse,
@@ -68,6 +70,13 @@ function qs(params: Record<string, string | number | undefined | null>): string 
 // ─── API Methods ──────────────────────────────────────────────────────────────
 
 export const api = {
+  // Organizations
+  getOrganization: () =>
+    apiFetch<Organization>("/api/v1/organizations/me"),
+
+  getOrgUsers: () =>
+    apiFetch<OrgUsersResponse>("/api/v1/organizations/me/users"),
+
   // Jobs
   getJobs: (params?: {
     location_id?: string;
@@ -79,10 +88,13 @@ export const api = {
   getJob: (jobId: string) =>
     apiFetch<JobDetail>(`/api/v1/jobs/${jobId}`),
 
-  uploadDocument: (file: File, locationId: string) => {
+  uploadDocument: (file: File, organizationId: string, locationId?: string) => {
     const form = new FormData();
     form.append("file", file);
-    form.append("location_id", locationId);
+    form.append("organization_id", organizationId);
+    if (locationId) {
+      form.append("location_id", locationId);
+    }
     return apiFetch<UploadResponse>("/api/v1/documents/upload", {
       method: "POST",
       body: form,

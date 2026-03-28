@@ -11,6 +11,7 @@ from backend.api.v1 import (
     events,
     health,
     jobs,
+    organizations,
     search,
     settings,
     triage,
@@ -45,6 +46,7 @@ app.add_middleware(
 app.include_router(webhooks.router, prefix="/api/v1", tags=["webhooks"])
 
 # API contract endpoints — all protected by WorkOS auth (TODO: add auth dependency)
+app.include_router(organizations.router, prefix="/api/v1", tags=["organizations"])
 app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
 app.include_router(jobs.router, prefix="/api/v1", tags=["jobs"])
 app.include_router(events.router, prefix="/api/v1", tags=["events"])

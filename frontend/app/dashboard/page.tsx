@@ -20,6 +20,7 @@ import type {
   Job,
   IntakeEvent,
   HealthResponse,
+  Organization,
   UploadResponse,
 } from "@/lib/types";
 
@@ -34,6 +35,7 @@ export default function DashboardPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [events, setEvents] = useState<IntakeEvent[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [org, setOrg] = useState<Organization | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<UploadResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +58,8 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadData();
+    // Fetch org once on mount and cache
+    api.getOrganization().then(setOrg).catch(() => {});
   }, [loadData]);
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -67,14 +71,11 @@ export default function DashboardPage() {
     setError(null);
 
     try {
-      // Use the first available location — in production, user selects location
-      const locRes = await api.getLocations();
-      const locationId = locRes.locations[0]?.location_id;
-      if (!locationId) {
-        setError("No location configured. Add one in Settings first.");
+      if (!org) {
+        setError("Organization not loaded. Please refresh the page.");
         return;
       }
-      const result = await api.uploadDocument(file, locationId);
+      const result = await api.uploadDocument(file, org.organization_id);
       setUploadResult(result);
       await loadData();
     } catch (e) {
@@ -204,7 +205,7 @@ export default function DashboardPage() {
                 <TableCell className="font-mono text-xs">
                   {job.job_id.slice(0, 8)}...
                 </TableCell>
-                <TableCell>{job.location_name}</TableCell>
+                <TableCell>{job.location_name ?? "—"}</TableCell>
                 <TableCell>{job.document_type ?? "—"}</TableCell>
                 <TableCell>
                   <Badge color={statusColor[job.status] ?? "gray"}>
