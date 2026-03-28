@@ -1,0 +1,83 @@
+# =============================================================================
+# OmniDrop AI — Local Development Docker Compose
+#
+# Starts: Redis + FastAPI backend + Celery worker
+#
+# Usage:
+#   docker compose up -d          # Start all services
+#   docker compose up redis        # Start Redis only
+#   docker compose logs -f worker  # Watch Celery worker logs
+#
+# Redis UI (optional): http://localhost:8001  (RedisInsight — see below)
+# Backend API docs:    http://localhost:8000/docs
+# Frontend:            http://localhost:3000  (run separately: cd frontend && npm run dev)
+# =============================================================================
+
+services:
+
+  redis:
+    image: redis:7-alpine
+    container_name: omnidrop-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: omnidrop-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./shared:/shared
+    command: uvicorn backend.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: omnidrop-worker
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./shared:/shared
+    command: celery -A backend.workers.celery_app worker --loglevel=info --concurrency=2
+
+  # Optional: RedisInsight — browser-based Redis GUI for inspecting task queues
+  # Accessible at http://localhost:8001 — remove for CI/CD environments
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: omnidrop-redisinsight
+    ports:
+      - "8001:5540"
+    depends_on:
+      - redis
+    profiles:
+      - debug   # Only starts with: docker compose --profile debug up
+
+volumes:
+  redis-data:

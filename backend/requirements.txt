@@ -1,0 +1,33 @@
+# OmniDrop AI — Backend Runtime Dependencies
+# Covers both the FastAPI web service AND the Celery worker process on Render.com
+
+# Core API framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.0
+pydantic-settings>=2.0
+
+# Async task queue + Redis broker
+# Worker start: celery -A backend.workers.celery_app worker --loglevel=info
+celery[redis]>=5.4.0
+redis>=5.0.0
+
+# Database
+supabase>=2.0.0
+
+# HTTP client
+httpx>=0.27.0
+
+# AI — Anthropic Claude
+# Default model: claude-opus-4-6
+anthropic>=0.30.0
+
+# Document parsing — Unstructured.io Omni-Parser
+# Docs: https://docs.unstructured.io/api-reference/api-services/sdk-python
+unstructured-client>=0.25.0
+
+# Error tracking — Sentry (captures 429s from AccuLynx + FastAPI errors)
+sentry-sdk[fastapi]>=2.0.0
+
+# Shared package (install from local path)
+-e ../shared

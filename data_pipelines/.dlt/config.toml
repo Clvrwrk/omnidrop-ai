@@ -1,0 +1,8 @@
+# dlt pipeline configuration (non-secret values)
+# Secret values (API keys, tokens) go in secrets.toml — NEVER in this file
+
+[runtime]
+log_level = "WARNING"
+
+[normalize.data_writer]
+file_max_items = 10000

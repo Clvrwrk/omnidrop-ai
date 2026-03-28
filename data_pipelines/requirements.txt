@@ -1,0 +1,2 @@
+# dlt with REST API source and PostgreSQL destination (Supabase-compatible)
+dlt[rest_api,postgres]>=0.5.0

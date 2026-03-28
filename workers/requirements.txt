@@ -1,0 +1,36 @@
+# OmniDrop AI — Worker Runtime Dependencies
+
+# Async task orchestration
+temporalio>=1.7.0
+
+# AI extraction
+anthropic>=0.30.0
+
+# Database
+supabase>=2.0.0
+
+# HTTP client
+httpx>=0.27.0
+
+# dlt for pipeline runs triggered from workers
+dlt[rest_api]>=0.5.0
+
+# --- Third-Party Services ---
+
+# Sentry — error tracking in worker activities (captures 429s from AccuLynx)
+# Docs: https://docs.sentry.io/platforms/python/
+sentry-sdk>=2.0.0
+
+# Azure Document Intelligence — pre-built invoice OCR (v4.0 SDK)
+# Used in extract_documents activity BEFORE Claude for structured pre-extraction
+# Docs: https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/
+azure-ai-documentintelligence>=1.0.0
+azure-core>=1.30.0
+
+# Merge.dev — push approved financials to QuickBooks/Sage
+# Used in push_to_accounting activity at end of IntakeWorkflow
+# Docs: https://github.com/merge-api/merge-python-client
+MergePythonClient>=1.0.0
+
+# Shared package
+-e ../shared

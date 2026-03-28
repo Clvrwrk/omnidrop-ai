@@ -1,0 +1,128 @@
+# =============================================================================
+# OmniDrop AI — Render.com Infrastructure as Code
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Services defined:
+#   1. omnidrop-api      — FastAPI web service (receives Hookdeck webhooks)
+#   2. omnidrop-worker   — Celery background worker (document processing)
+#   3. omnidrop-redis    — Redis broker + result backend (Render Key Value)
+#   4. omnidrop-flower   — Celery monitoring UI (optional, remove for prod)
+#
+# Deploy: Connect your GitHub repo in the Render dashboard and select this file.
+# All services share secrets via envVarGroups defined in the Render dashboard.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # 1. FastAPI Web Service
+  #    Receives Hookdeck webhook deliveries and dispatches Celery tasks.
+  #    Health check at /health confirms the service is up before routing traffic.
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: omnidrop-api
+    runtime: python
+    region: oregon
+    plan: starter
+    branch: main
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: CELERY_BROKER_URL
+        fromService:
+          name: omnidrop-redis
+          type: redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          name: omnidrop-redis
+          type: redis
+          property: connectionString
+      # Secrets — set in Render dashboard → Environment Groups → omnidrop-secrets
+      - fromGroup: omnidrop-secrets
+
+  # ---------------------------------------------------------------------------
+  # 2. Celery Background Worker
+  #    Executes the full intake pipeline: Unstructured.io → Claude → Supabase.
+  #    Concurrency of 4 is a safe starting point; tune based on job volume.
+  # ---------------------------------------------------------------------------
+  - type: worker
+    name: omnidrop-worker
+    runtime: python
+    region: oregon
+    plan: starter
+    branch: main
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: celery -A backend.workers.celery_app worker --loglevel=info --concurrency=4
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: CELERY_BROKER_URL
+        fromService:
+          name: omnidrop-redis
+          type: redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          name: omnidrop-redis
+          type: redis
+          property: connectionString
+      - fromGroup: omnidrop-secrets
+
+  # ---------------------------------------------------------------------------
+  # 3. Redis (Render Key Value)
+  #    Acts as both the Celery task broker and result backend.
+  #    maxmemoryPolicy: noeviction ensures queued tasks are never silently dropped.
+  # ---------------------------------------------------------------------------
+  - type: redis
+    name: omnidrop-redis
+    region: oregon
+    plan: starter
+    maxmemoryPolicy: noeviction
+    ipAllowList: []   # Only accessible internally to services in this blueprint
+
+  # ---------------------------------------------------------------------------
+  # 4. Flower (Celery monitoring) — OPTIONAL
+  #    Provides a web UI to inspect task queues, worker status, and task history.
+  #    Remove or comment out this service for production deployments where you
+  #    don't want to expose a monitoring endpoint publicly.
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: omnidrop-flower
+    runtime: python
+    region: oregon
+    plan: free
+    branch: main
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: celery -A backend.workers.celery_app flower --loglevel=info
+    autoDeploy: true
+    envVars:
+      - key: CELERY_BROKER_URL
+        fromService:
+          name: omnidrop-redis
+          type: redis
+          property: connectionString
+
+# =============================================================================
+# Environment Group: omnidrop-secrets
+# Create this in Render Dashboard → Environment Groups before first deploy.
+# Add the following secrets:
+#
+#   APP_SECRET_KEY
+#   SUPABASE_URL
+#   SUPABASE_KEY
+#   SUPABASE_SERVICE_ROLE_KEY
+#   ANTHROPIC_API_KEY
+#   ACCULYNX_API_KEY
+#   HOOKDECK_SIGNING_SECRET
+#   WORKOS_API_KEY
+#   WORKOS_CLIENT_ID
+#   WORKOS_COOKIE_PASSWORD
+#   UNSTRUCTURED_API_KEY
+#   SENTRY_PYTHON_DSN
+# =============================================================================

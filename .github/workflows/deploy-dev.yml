@@ -1,0 +1,50 @@
+name: Deploy to omnidrop.dev
+
+on:
+  push:
+    branches: [main]
+
+# Only run one deploy at a time
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: true
+
+jobs:
+  deploy-dev:
+    name: Deploy to omnidrop.dev
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # TODO: Configure deployment steps once hosting provider is selected.
+      # Suggested options:
+      #   Frontend:  Vercel (automatic on push) or Cloudflare Pages
+      #   Backend:   Fly.io, Railway, or Render
+      #   Workers:   Same platform as backend, separate service
+      #   Supabase:  supabase db push --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}
+
+      - name: Deploy frontend
+        run: echo "TODO: configure frontend deploy (Vercel / Cloudflare Pages)"
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_API_BASE_URL: https://api.omnidrop.dev
+
+      - name: Deploy backend
+        run: echo "TODO: configure backend deploy"
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ACCULYNX_API_KEY: ${{ secrets.ACCULYNX_API_KEY }}
+          ACCULYNX_WEBHOOK_SECRET: ${{ secrets.ACCULYNX_WEBHOOK_SECRET }}
+          TEMPORAL_HOST: ${{ secrets.TEMPORAL_HOST }}
+          TEMPORAL_NAMESPACE: omnidrop-dev
+
+      - name: Run database migrations
+        run: echo "TODO: supabase db push --project-ref $SUPABASE_PROJECT_REF"
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}

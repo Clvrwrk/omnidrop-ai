@@ -1,0 +1,74 @@
+# =============================================================================
+# OmniDrop AI — Staging Docker Compose (omnidrop.dev / sandbox.omnidrop.dev)
+# Full Temporal cluster with PostgreSQL persistence.
+#
+# Usage:
+#   docker compose -f docker-compose.staging.yml up -d
+# =============================================================================
+
+services:
+
+  temporal-postgresql:
+    image: postgres:16
+    container_name: omnidrop-temporal-db
+    environment:
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_USER: temporal
+      POSTGRES_DB: temporal
+    volumes:
+      - temporal-db-data:/var/lib/postgresql/data
+
+  temporal:
+    image: temporalio/auto-setup:latest
+    container_name: omnidrop-temporal
+    depends_on:
+      - temporal-postgresql
+    ports:
+      - "7233:7233"
+      - "8233:8233"
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-postgresql
+
+  temporal-ui:
+    image: temporalio/ui:latest
+    container_name: omnidrop-temporal-ui
+    depends_on:
+      - temporal
+    ports:
+      - "8080:8080"
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: omnidrop-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - temporal
+    volumes:
+      - ./shared:/shared
+
+  workers:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile
+    container_name: omnidrop-workers
+    env_file:
+      - .env
+    depends_on:
+      - temporal
+    volumes:
+      - ./shared:/shared
+
+volumes:
+  temporal-db-data:
