@@ -62,9 +62,9 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         origins = {
             "local": ["http://localhost:3000"],
-            "dev": ["https://omnidrop.dev"],
+            "dev": ["https://app.omnidrop.dev"],
             "sandbox": ["https://sandbox.omnidrop.dev"],
-            "production": ["https://omnidrop.ai"],
+            "production": ["https://app.omnidrop.ai"],
         }
         return origins.get(self.app_env, ["http://localhost:3000"])
 

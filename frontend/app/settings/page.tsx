@@ -22,6 +22,30 @@ const statusColor: Record<string, string> = {
   untested: "gray",
 };
 
+interface SlackFormState {
+  webhookUrl: string;
+  channel: string;
+  saving: boolean;
+  testing: boolean;
+  saveMessage: string | null;
+  saveError: boolean;
+  testMessage: string | null;
+  testSuccess: boolean | null;
+}
+
+function defaultSlackState(loc: Location): SlackFormState {
+  return {
+    webhookUrl: loc.notification_channels?.slack?.webhook_url ?? "",
+    channel: loc.notification_channels?.slack?.channel ?? "",
+    saving: false,
+    testing: false,
+    saveMessage: null,
+    saveError: false,
+    testMessage: null,
+    testSuccess: null,
+  };
+}
+
 export default function SettingsPage() {
   const [org, setOrg] = useState<Organization | null>(null);
   const [users, setUsers] = useState<OrgUser[]>([]);
@@ -31,6 +55,10 @@ export default function SettingsPage() {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [apiKey, setApiKey] = useState("");
+  // Per-location Slack notification form state keyed by location_id
+  const [slackForms, setSlackForms] = useState<
+    Record<string, SlackFormState>
+  >({});
 
   const loadOrg = useCallback(async () => {
     try {
@@ -50,10 +78,107 @@ export default function SettingsPage() {
     try {
       const res = await api.getLocations();
       setLocations(res.locations);
+      // Initialise Slack form state for any new locations
+      setSlackForms((prev) => {
+        const next = { ...prev };
+        for (const loc of res.locations) {
+          if (!next[loc.location_id]) {
+            next[loc.location_id] = defaultSlackState(loc);
+          }
+        }
+        return next;
+      });
     } catch (e) {
       if (e instanceof ApiError) setError(e.message);
     }
   }, []);
+
+  function updateSlackField(
+    locationId: string,
+    field: keyof Pick<SlackFormState, "webhookUrl" | "channel">,
+    value: string,
+  ) {
+    setSlackForms((prev) => ({
+      ...prev,
+      [locationId]: { ...prev[locationId], [field]: value },
+    }));
+  }
+
+  async function handleSaveNotifications(locationId: string) {
+    const form = slackForms[locationId];
+    if (!form) return;
+    setSlackForms((prev) => ({
+      ...prev,
+      [locationId]: {
+        ...prev[locationId],
+        saving: true,
+        saveMessage: null,
+        saveError: false,
+      },
+    }));
+    try {
+      await api.updateLocationNotifications(locationId, {
+        slack_webhook_url: form.webhookUrl.trim() || null,
+        slack_channel: form.channel.trim() || null,
+      });
+      setSlackForms((prev) => ({
+        ...prev,
+        [locationId]: {
+          ...prev[locationId],
+          saving: false,
+          saveMessage: "Saved.",
+          saveError: false,
+        },
+      }));
+    } catch (e) {
+      setSlackForms((prev) => ({
+        ...prev,
+        [locationId]: {
+          ...prev[locationId],
+          saving: false,
+          saveMessage:
+            e instanceof ApiError ? e.message : "Failed to save settings.",
+          saveError: true,
+        },
+      }));
+    }
+  }
+
+  async function handleTestNotifications(locationId: string) {
+    setSlackForms((prev) => ({
+      ...prev,
+      [locationId]: {
+        ...prev[locationId],
+        testing: true,
+        testMessage: null,
+        testSuccess: null,
+      },
+    }));
+    try {
+      const res = await api.testLocationNotifications(locationId);
+      setSlackForms((prev) => ({
+        ...prev,
+        [locationId]: {
+          ...prev[locationId],
+          testing: false,
+          testMessage: res.success
+            ? "Test message sent to Slack ✓"
+            : res.message || "Failed — check your webhook URL",
+          testSuccess: res.success,
+        },
+      }));
+    } catch {
+      setSlackForms((prev) => ({
+        ...prev,
+        [locationId]: {
+          ...prev[locationId],
+          testing: false,
+          testMessage: "Failed — check your webhook URL",
+          testSuccess: false,
+        },
+      }));
+    }
+  }
 
   useEffect(() => {
     loadOrg();
@@ -220,53 +345,153 @@ export default function SettingsPage() {
         </Card>
 
         {/* Locations List */}
-        <Card>
-          <Title>Registered Locations</Title>
-          <Table className="mt-4">
-            <TableHead>
-              <TableRow>
-                <TableHeaderCell>Name</TableHeaderCell>
-                <TableHeaderCell>API Key</TableHeaderCell>
-                <TableHeaderCell>Status</TableHeaderCell>
-                <TableHeaderCell>Added</TableHeaderCell>
-                <TableHeaderCell>Actions</TableHeaderCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {locations.map((loc) => (
-                <TableRow key={loc.location_id}>
-                  <TableCell>{loc.name}</TableCell>
-                  <TableCell className="font-mono text-xs">
-                    ****{loc.api_key_last4}
-                  </TableCell>
-                  <TableCell>
-                    <Badge color={statusColor[loc.connection_status] ?? "gray"}>
-                      {loc.connection_status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    {new Date(loc.created_at).toLocaleDateString()}
-                  </TableCell>
-                  <TableCell>
-                    <button
-                      onClick={() => handleDelete(loc.location_id)}
-                      className="text-sm text-red-600 hover:text-red-800"
-                    >
-                      Remove
-                    </button>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {locations.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-center text-gray-400">
-                    No locations registered
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </Card>
+        {locations.length === 0 ? (
+          <Card>
+            <Text className="text-center text-gray-400">
+              No locations registered
+            </Text>
+          </Card>
+        ) : (
+          <div className="space-y-4">
+            {locations.map((loc) => {
+              const form = slackForms[loc.location_id];
+              return (
+                <Card key={loc.location_id}>
+                  {/* Location header row */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Title>{loc.name}</Title>
+                      <Text className="text-xs text-gray-500">
+                        API key: ****{loc.api_key_last4} &nbsp;·&nbsp; Added{" "}
+                        {new Date(loc.created_at).toLocaleDateString()}
+                      </Text>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Badge
+                        color={
+                          (statusColor[loc.connection_status] as
+                            | "green"
+                            | "red"
+                            | "gray") ?? "gray"
+                        }
+                      >
+                        {loc.connection_status}
+                      </Badge>
+                      <button
+                        onClick={() => handleDelete(loc.location_id)}
+                        className="text-sm text-red-600 hover:text-red-800"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* ── Notifications section ──────────────────────────── */}
+                  <div className="mt-5 border-t pt-5 space-y-4">
+                    <Title>Notifications</Title>
+
+                    <div>
+                      <label
+                        htmlFor={`slack-url-${loc.location_id}`}
+                        className="block text-sm font-medium text-gray-700"
+                      >
+                        Slack Webhook URL
+                      </label>
+                      <input
+                        id={`slack-url-${loc.location_id}`}
+                        type="text"
+                        value={form?.webhookUrl ?? ""}
+                        onChange={(e) =>
+                          updateSlackField(
+                            loc.location_id,
+                            "webhookUrl",
+                            e.target.value,
+                          )
+                        }
+                        placeholder="https://hooks.slack.com/services/..."
+                        className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                      />
+                      <Text className="mt-1 text-xs text-gray-500">
+                        Paste your Slack Incoming Webhook URL. We&apos;ll send
+                        document clarification alerts here when AI can&apos;t
+                        process a file.
+                      </Text>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor={`slack-channel-${loc.location_id}`}
+                        className="block text-sm font-medium text-gray-700"
+                      >
+                        Channel (optional)
+                      </label>
+                      <input
+                        id={`slack-channel-${loc.location_id}`}
+                        type="text"
+                        value={form?.channel ?? ""}
+                        onChange={(e) =>
+                          updateSlackField(
+                            loc.location_id,
+                            "channel",
+                            e.target.value,
+                          )
+                        }
+                        placeholder="#field-ops"
+                        className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <button
+                        onClick={() =>
+                          handleSaveNotifications(loc.location_id)
+                        }
+                        disabled={form?.saving}
+                        className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        {form?.saving ? "Saving..." : "Save"}
+                      </button>
+                      <button
+                        onClick={() =>
+                          handleTestNotifications(loc.location_id)
+                        }
+                        disabled={
+                          form?.testing || !form?.webhookUrl?.trim()
+                        }
+                        className="rounded border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        {form?.testing ? "Sending..." : "Test"}
+                      </button>
+
+                      {form?.saveMessage && (
+                        <Text
+                          className={`text-sm ${
+                            form.saveError
+                              ? "text-red-600"
+                              : "text-green-600"
+                          }`}
+                        >
+                          {form.saveMessage}
+                        </Text>
+                      )}
+                      {form?.testMessage && (
+                        <Text
+                          className={`text-sm ${
+                            form.testSuccess === false
+                              ? "text-red-600"
+                              : "text-green-600"
+                          }`}
+                        >
+                          {form.testMessage}
+                        </Text>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

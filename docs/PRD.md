@@ -1,7 +1,7 @@
 # Product Requirements Document
-# Omni-Intake AI Agent — Enterprise Edition
+# OmniDrop AI — Revenue Recovery Platform
 
-**Version:** 1.1
+**Version:** 2.0
 **Status:** Approved — Phase 2 Implementation
 **Last Updated:** 2026-03-28
 
@@ -9,116 +9,226 @@
 
 ## 1. Objective
 
-Build a zero-cognitive-load, multi-modal document ingestion engine that automates roofing accounting and document retrieval. The system passively and actively ingests structured data (invoices, job costs) and unstructured knowledge (MSDS sheets, warranty manuals, field guides), converting them into actionable insights and a semantically searchable knowledge base — with no manual categorization required from users.
+Build a zero-cognitive-load revenue recovery platform for roofing accounting teams. The primary
+goal is not document storage — it is **identifying lost revenue** by cross-referencing supplier
+invoices against contracted pricing, surfacing overcharges at the line-item level across all
+branches of a multi-location roofing enterprise.
+
+The system passively ingests documents from AccuLynx webhooks and actively accepts direct
+uploads. Every document is scored for AI-processability, then routed: high-confidence documents
+are extracted and interrogated for leakage automatically; medium-confidence documents go to a
+human review queue; low-confidence documents are bounced back to the field with a targeted
+clarification question.
 
 ---
 
 ## 2. Core User Personas
 
-### The Accountant
-Processes hundreds of invoices per week. Primary pain point is manual data entry and vendor SKU reconciliation. Needs:
-- Automatic invoice extraction with structured JSON output
-- A focused Human-in-the-Loop (HITL) review screen for AI uncertainties and unrecognized SKUs
-- Confidence scoring on extracted fields so low-confidence items surface for review
+### The Strategist (C-Suite / Owner)
+Runs a multi-location roofing company. Primary concern: are my branches paying above our national
+supplier contracts, and by how much? Needs:
+- Single-screen revenue recovery view aggregated across all branches
+- No training curve — must read like a financial dashboard, not a data tool
+- "Idaho Branch paid $42/bundle vs. our $35 national contract — $14K overcharge this quarter"
 
-### The C-Suite / Ops Manager
-Needs macro-level analytics on job costs, vendor spend, and margins without navigating complex reports. Needs:
-- Natural language query interface ("What is total vendor spend for Q1 by job?")
-- Visual KPI dashboards with trend charts
-- Zero training curve — must work like a search engine
+**Primary surface:** `/dashboard/c-suite`
+
+### The Detective (Accounting / Ops Manager)
+Processes hundreds of invoices per week. Primary pain point: documents the AI couldn't fully
+process are piling up and blocking reconciliation. Needs:
+- A focused, low-friction queue of documents that need clarification
+- Split-screen review: document on the left, extracted data with flagged fields on the right
+- Plain-English questions — not raw JSON fields
+- Every correction they make improves future AI accuracy (flywheel)
+
+**Primary surface:** `/dashboard/ops`
+
+### The Location Manager
+Each roofing branch has its own AccuLynx instance and its own supplier relationships. Needs:
+- Self-service UI to register their branch name and AccuLynx API key
+- Notification channel setup (Slack webhook for field alerts)
+- Per-location document visibility and processing status
+
+**Primary surface:** `/settings`
+
+### The Field Salesperson
+Takes photos and uploads job documents on-site. Not an OmniDrop user — interacts with the
+system only when a document they submitted couldn't be processed. Needs:
+- A clear, non-technical message explaining what went wrong
+- A single specific question to answer, not a support ticket
+- Response path that doesn't require logging into another app
+
+**Primary surface:** Slack message with deep link to `/dashboard/ops/jobs/[id]`
 
 ### The DevOps Admin
-Manages integration health and API governance. Needs:
-- Real-time webhook delivery status and retry visibility
-- AccuLynx rate limit monitoring and alerting
+Manages integration health. Needs:
+- Webhook delivery status and retry visibility
 - Celery worker queue depth and task failure dashboards
+- AccuLynx rate limit monitoring (429 alerts via Sentry)
 
-### The Roofing Location Manager *(new)*
-Each roofing location has its own AccuLynx instance with its own API key. Needs:
-- Self-service UI to register location name and AccuLynx API key
-- Ability to manage multiple locations under one account
-- Per-location document visibility
+**Primary surface:** `/dashboard/c-suite` system health section (admin role)
 
 ---
 
 ## 3. Product Features
 
 ### 3.1 Omni-Drop Interface
-A single drag-and-drop zone that accepts any file type — PDFs, images, spreadsheets, scanned documents — and intelligently routes them through the pipeline without requiring the user to categorize them. The AI determines document type automatically.
+Drag-and-drop zone on the dashboard that accepts any file type. The AI determines document
+type, quality, and routing automatically — zero manual categorization required.
 
-**Routes to:** `/dashboard` (upload trigger) → Celery pipeline
+**Routes to:** `/dashboard` upload → Celery pipeline
 
-### 3.2 Passive AccuLynx Sync
-Webhooks automatically pull new job files, milestones, and documents from AccuLynx into the platform without user action. Hookdeck manages the webhook gateway so AccuLynx's 10-second response timeout is never at risk.
+### 3.2 Context Score Engine
+Every document receives a 0–100 Context Score immediately after Unstructured.io parsing.
+The score is evaluated by Claude against a configurable rubric stored in `system_config`.
 
-**Multi-tenant:** Each roofing location has its own AccuLynx API key. Location managers register their keys via the Settings page. The system fetches the correct key per location at processing time.
+| Score | Label | Action |
+|---|---|---|
+| 80–100 | High | Auto-process → extraction → leakage detection |
+| 40–79 | Medium | Auto-process → extraction → Ops review queue |
+| 0–39 | Low | Bounce back → Slack alert to field contact |
 
-**Routes to:** `POST /api/v1/webhooks/acculynx` → Celery queue
+The rubric covers: vendor identifiability, document legibility, financial data presence,
+and metadata completeness. Rubric weights are recalibrated from anonymized cross-customer
+data after alpha — no code deploy required.
 
-### 3.3 CMD+K Analytics & Search (RAG)
-A Spotlight-style command bar accessible from any page. Supports two query modes:
-- **Semantic search:** "What is the warranty period for Timberline shingles in the GAF manual?" → searches pgvector embeddings
-- **Analytical queries:** "What is total SKU spend for Q1 by vendor?" → Text-to-SQL agent queries structured tables
+**Routes to:** Celery `score_context` task (runs after `process_document`)
 
-**Routes to:** `/search` (semantic) + `/analytics` (structured queries + Tremor charts)
+### 3.3 Revenue Recovery Dashboard
+The flagship C-Suite feature. Displays revenue leakage findings aggregated at the
+organization level — cross-branch, not siloed by location.
 
-### 3.4 Human-in-the-Loop (HITL) Triage
-A focused split-screen interface for accountants to resolve AI uncertainties:
-- Left pane: original document (PDF viewer)
+Key views:
+- **Total overcharge this period** — currency amount across all branches
+- **By branch** — which locations are paying above contract most often
+- **By vendor** — which suppliers are charging above contracted rates
+- **By SKU** — which line items account for the most leakage
+
+Powered by: `revenue_findings` table + `pricing_contracts` (Contract Mode) or
+`vendor_baseline_prices` view (Baseline Mode).
+
+**Routes to:** `/dashboard/c-suite`
+
+### 3.4 Ops "Needs Clarity" Queue
+HITL review interface for medium-context documents. Split-screen UI:
+- Left pane: original document (PDF viewer or image)
 - Right pane: extracted fields with confidence scores, flagged low-confidence items
-- Accountants confirm, correct, or reject extractions
-- Unrecognized vendor SKUs are surfaced for mapping to the master database
+- Accountants confirm, correct, or reject extractions with plain-English prompts
+- Every correction writes to `context_reference_examples` — feeds Phase 2 vector scoring
 
-**Routes to:** `/triage` (dedicated review screen)
+**Routes to:** `/dashboard/ops` + `/dashboard/ops/jobs/[id]`
 
-### 3.5 Location Settings & AccuLynx Key Management *(critical for multi-tenancy)*
-Self-service settings page where location managers:
-- Add roofing locations by name
-- Enter the AccuLynx API key for each location
+### 3.5 Bounce-Back Notifications
+Low-context documents (score 0–39) are not routed to the Ops queue — they are immediately
+bounced back to the field via Slack. The message includes:
+- A one-sentence summary of what the AI detected
+- A single targeted clarification question (Claude-generated)
+- A deep link to the document in the Ops dashboard
+
+The notification system is channel-agnostic. Alpha ships Slack only. AccuLynx job message
+write-back and Signal are future adapters behind the same interface.
+
+Each location manager configures their Slack webhook URL in `/settings`.
+
+**Routes to:** Celery `bounce_back` task → `notification_service.SlackAdapter`
+
+### 3.6 Passive AccuLynx Sync
+Webhooks automatically pull new job files from AccuLynx without user action. Hookdeck
+manages the gateway; AccuLynx's 10-second timeout is never at risk.
+
+Multi-tenant: each location has its own API key registered in `/settings`.
+
+**Routes to:** `POST /api/v1/webhooks/acculynx` → Celery
+
+### 3.7 CMD+K Semantic Search (RAG)
+Spotlight-style search over unstructured knowledge base:
+- **Semantic:** "What is the warranty period for Timberline shingles?" → pgvector
+- **Analytical:** "Total SKU spend for Q1 by vendor?" → Text-to-SQL agent
+
+**Routes to:** `/search`
+
+### 3.8 Onboarding Wizard
+Five-step flow designed to deliver the Aha moment (found revenue) within the first batch.
+Critical path: Step 3 (pricing reference) must be completed or skipped to Baseline Mode
+before the first batch is processed — without a pricing reference, leakage detection
+produces no findings.
+
+| Step | Action | Purpose |
+|---|---|---|
+| 1 | Company Setup | Name, timezone, invite team (up to 5 for free tier) |
+| 2 | Connect Location | AccuLynx API key + Slack webhook URL |
+| 3 | Unlock Revenue Detection | Upload pricing contract OR skip to Baseline Mode |
+| 4 | Process First Batch | Upload or sync from AccuLynx |
+| 5 | Your First Findings | Dashboard highlights first leakage finding |
+
+Step 3 copy: *"Customers who complete this step find an average of $8,400 in overcharges
+within their first 50 invoices."*
+
+Alpha delivery is sales-assisted — the wizard does not need to be self-serve for launch.
+
+**Routes to:** `/onboarding`
+
+### 3.9 Location Settings & AccuLynx Key Management
+Self-service settings page:
+- Add/edit roofing locations
+- Enter AccuLynx API key per location
+- Enter Slack webhook URL + optional channel name per location
+- "Test" button sends a sample Slack message
 - View connection status per location
-- Remove or rotate keys
 
 **Routes to:** `/settings`
 
-### 3.6 Enterprise Identity (WorkOS)
-Frictionless authentication supporting:
-- Magic Links (email)
-- SAML SSO (enterprise)
-- Microsoft / Google OAuth
+### 3.10 Enterprise Identity (WorkOS)
+- Magic Links (email), SAML SSO, Microsoft/Google OAuth
 - SCIM directory sync for user provisioning
-- RBAC: Admin, Accountant, Manager, Viewer roles
+- RBAC roles: Admin, Accountant/Ops, C-Suite, Location Manager, Viewer
+- Role determines default dashboard landing: C-Suite → `/dashboard/c-suite`, Ops → `/dashboard/ops`
 
 **Routes to:** WorkOS hosted UI → `/callback` → session cookie
 
-### 3.7 System Health Dashboard
-DevOps visibility:
-- Webhook delivery status, retry count, last error (Hookdeck feed)
-- Celery worker status, queue depth, task failure rate
-- AccuLynx API rate limit consumption (429 alerts via Sentry)
-- Supabase connection health
+---
 
-**Routes to:** `/dashboard` (admin view)
+## 4. Freemium Tier
+
+| Feature | Free | Pro | Enterprise |
+|---|---|---|---|
+| Documents | 500 | Unlimited | Unlimited |
+| Users | 5 | Unlimited | Unlimited |
+| Locations | 1 | Unlimited | Unlimited |
+| Pricing contracts | 1 | Unlimited | Unlimited |
+| Leakage detection | Yes (Baseline Mode) | Yes (Contract + Baseline) | Yes |
+| Slack notifications | Yes | Yes | Yes |
+
+Freemium counter shown in the app layout: *"247 / 500 documents used. [Upgrade]"*
+Counter turns amber at 80%, red at 95%. At 100%: pipeline pauses, existing data remains
+accessible, upgrade CTA shown. API returns 402 for new submissions.
 
 ---
 
-## 4. Non-Functional Requirements
+## 5. Non-Functional Requirements
 
 | Requirement | Target |
 |---|---|
 | Webhook acknowledgement | < 200ms (Hookdeck ACKs AccuLynx) |
 | AccuLynx rate compliance | ≤ 10 req/sec per location API key |
-| Invoice extraction accuracy | ≥ 95% field-level accuracy (HITL covers remainder) |
-| Initial bulk load support | 5,000 documents without data loss |
+| Context Score response | Single Claude API call, no second round-trip |
+| Invoice extraction accuracy | ≥ 95% field-level (HITL covers remainder) |
+| Bounce-back delivery | < 60 seconds from document receipt |
+| Initial bulk load | 5,000 documents without data loss |
 | Auth session | WorkOS encrypted cookie, 30-day rolling |
-| Data isolation | Supabase RLS — users see only their location's data |
+| Data isolation | Supabase RLS — users see only their organization's data |
 | Error visibility | Sentry captures all 4xx/5xx + AI extraction failures |
 
 ---
 
-## 5. Out of Scope (Current Phase)
+## 6. Out of Scope (Current Phase)
 
 - Mobile app
 - Direct QuickBooks / accounting system push (Merge.dev removed from scope)
 - Multi-language document support
 - Custom AI model fine-tuning
-- Stripe billing integration
+- Stripe billing integration (freemium limits enforced, upgrade flow is manual for alpha)
+- Self-serve sign-up (alpha is sales-assisted)
+- Vector-based Context Score enhancement (Phase 2 — requires 500+ labeled examples per org)
+- Signal notification adapter (Phase 2 — same interface as Slack, add after alpha)
+- AccuLynx notification adapter (Phase 2 — requires @mention behavior testing)

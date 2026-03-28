@@ -3,6 +3,7 @@ import Link from "next/link";
 import { withAuth } from "@workos-inc/authkit-nextjs";
 import { SessionProvider } from "@/components/session-provider";
 import { SignOutButton } from "@/components/sign-out-button";
+import { OpsQueueBadge } from "@/components/ops-queue-badge";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -11,10 +12,9 @@ export const metadata: Metadata = {
 };
 
 const navItems = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/analytics", label: "Analytics" },
+  { href: "/dashboard/c-suite", label: "Revenue Recovery" },
+  { href: "/dashboard/ops", label: "Ops Queue" },
   { href: "/search", label: "Search" },
-  { href: "/triage", label: "Triage" },
   { href: "/settings", label: "Settings" },
 ];
 
@@ -50,9 +50,10 @@ export default async function RootLayout({
                   <Link
                     key={item.href}
                     href={item.href}
-                    className="text-sm text-gray-600 hover:text-gray-900"
+                    className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900"
                   >
                     {item.label}
+                    {item.href === "/dashboard/ops" && <OpsQueueBadge />}
                   </Link>
                 ))}
                 <SignOutButton />

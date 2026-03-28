@@ -27,11 +27,11 @@ services:
     branch: main
     buildCommand: pip install -r backend/requirements.txt
     startCommand: uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /health
+    healthCheckPath: /api/v1/health
     autoDeploy: true
     envVars:
       - key: APP_ENV
-        value: production
+        value: dev
       - key: CELERY_BROKER_URL
         fromService:
           name: omnidrop-redis
@@ -61,7 +61,7 @@ services:
     autoDeploy: true
     envVars:
       - key: APP_ENV
-        value: production
+        value: dev
       - key: CELERY_BROKER_URL
         fromService:
           name: omnidrop-redis
@@ -87,7 +87,35 @@ services:
     ipAllowList: []   # Only accessible internally to services in this blueprint
 
   # ---------------------------------------------------------------------------
-  # 4. Flower (Celery monitoring) — OPTIONAL
+  # 4. Next.js Frontend
+  #    Serves the dashboard at omnidrop.dev.
+  #    Custom domain: set omnidrop.dev in Render Dashboard → omnidrop-frontend
+  #    → Settings → Custom Domains. Add CNAME at Namecheap pointing @ to
+  #    the Render-provided hostname.
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: omnidrop-frontend
+    runtime: node
+    region: oregon
+    plan: starter
+    branch: main
+    buildCommand: cd frontend && npm ci && npm run build
+    startCommand: cd frontend && npm run start
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_APP_ENV
+        value: dev
+      - key: NEXT_PUBLIC_API_BASE_URL
+        value: https://api.omnidrop.dev
+      - key: NEXT_PUBLIC_WORKOS_REDIRECT_URI
+        value: https://app.omnidrop.dev/callback
+      # Secrets — set in Render dashboard → Environment Groups → omnidrop-secrets
+      - fromGroup: omnidrop-secrets
+
+  # ---------------------------------------------------------------------------
+  # 5. Flower (Celery monitoring) — OPTIONAL
   #    Provides a web UI to inspect task queues, worker status, and task history.
   #    Remove or comment out this service for production deployments where you
   #    don't want to expose a monitoring endpoint publicly.
@@ -114,15 +142,20 @@ services:
 # Add the following secrets:
 #
 #   APP_SECRET_KEY
+#   APP_BASE_URL            — https://omnidrop.dev (used in bounce-back deep links)
 #   SUPABASE_URL
 #   SUPABASE_KEY
 #   SUPABASE_SERVICE_ROLE_KEY
 #   ANTHROPIC_API_KEY
-#   ACCULYNX_API_KEY
+#   VOYAGE_API_KEY          — Voyage AI embeddings (voyage-3, 1024-dim)
 #   HOOKDECK_SIGNING_SECRET
 #   WORKOS_API_KEY
 #   WORKOS_CLIENT_ID
 #   WORKOS_COOKIE_PASSWORD
 #   UNSTRUCTURED_API_KEY
 #   SENTRY_PYTHON_DSN
+#
+# Note: AccuLynx API keys are per-location and stored in Supabase.
+#   There is no global ACCULYNX_API_KEY. Location managers enter their keys
+#   via the /settings UI; the worker fetches them at task runtime by location_id.
 # =============================================================================

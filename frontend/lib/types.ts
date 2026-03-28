@@ -4,6 +4,9 @@ export interface Organization {
   organization_id: string;
   workos_org_id: string;
   name: string;
+  plan_tier: "free" | "pro" | "enterprise";
+  max_documents: number;
+  documents_processed: number;
   max_users: number;
   created_at: string;
 }
@@ -232,12 +235,22 @@ export interface TriagePatchResponse {
 
 export type ConnectionStatus = "active" | "invalid" | "untested";
 
+export interface SlackNotificationChannel {
+  webhook_url: string;
+  channel: string | null;
+}
+
+export interface NotificationChannels {
+  slack?: SlackNotificationChannel;
+}
+
 export interface Location {
   location_id: string;
   organization_id: string;
   name: string;
   api_key_last4: string;
   connection_status: ConnectionStatus;
+  notification_channels: NotificationChannels;
   created_at: string;
   updated_at: string;
 }
@@ -250,6 +263,13 @@ export interface CreateLocationRequest {
   name: string;
   acculynx_api_key: string;
   organization_id: string;
+  notification_channels?: NotificationChannels;
+}
+
+// ─── Pricing Contracts ────────────────────────────────────────────────────────
+
+export interface UploadPricingContractResponse {
+  contract_id: string;
 }
 
 export interface CreateLocationResponse {
@@ -272,6 +292,78 @@ export interface UpdateLocationResponse {
   api_key_last4: string;
   connection_status: "untested";
   updated_at: string;
+}
+
+// ─── Leakage / C-Suite ────────────────────────────────────────────────────────
+
+export interface LeakageByLocation {
+  location_name: string;
+  total_leakage: number;
+  finding_count: number;
+}
+
+export interface LeakageByVendor {
+  vendor_name: string;
+  total_leakage: number;
+  finding_count: number;
+}
+
+export interface LeakageSummary {
+  total_leakage: number;
+  finding_count: number;
+  by_location: LeakageByLocation[];
+  by_vendor: LeakageByVendor[];
+  period: string;
+}
+
+// ─── Ops Queue / HITL ────────────────────────────────────────────────────────
+
+export interface OpsTriageQueueItem {
+  job_id: string;
+  document_id: string;
+  file_name: string;
+  location_name: string;
+  context_score: number;
+  document_summary: string;
+  triage_status: string;
+  created_at: string;
+}
+
+export interface OpsTriageQueueResponse {
+  items: OpsTriageQueueItem[];
+  total: number;
+}
+
+export interface OpsJobDetail {
+  job_id: string;
+  file_name: string;
+  context_score: number | null;
+  context_routing: "high" | "medium" | "low" | null;
+  document_summary: string | null;
+  clarification_question: string | null;
+  triage_status: string;
+  location_name: string;
+  organization_name: string;
+  created_at: string;
+  raw_path: string | null;
+  extraction: Record<string, { value: unknown; confidence: number }> | null;
+}
+
+// ─── Notification settings ────────────────────────────────────────────────────
+
+export interface UpdateLocationNotificationsRequest {
+  slack_webhook_url: string | null;
+  slack_channel: string | null;
+}
+
+export interface UpdateLocationNotificationsResponse {
+  location_id: string;
+  updated_at: string;
+}
+
+export interface TestLocationNotificationsResponse {
+  success: boolean;
+  message: string;
 }
 
 // ─── Health ───────────────────────────────────────────────────────────────────

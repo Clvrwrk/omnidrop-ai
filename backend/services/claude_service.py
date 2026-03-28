@@ -22,6 +22,7 @@ import anthropic
 import voyageai
 
 from backend.core.config import settings
+from backend.services.supabase_client import get_system_config
 
 logger = logging.getLogger(__name__)
 
@@ -339,3 +340,191 @@ locations (location_id UUID PK, user_id TEXT, name TEXT, acculynx_api_key TEXT, 
             extra={"document_id": document_id, "chunk_count": len(results)},
         )
         return results
+
+    # ── Context Scoring ──────────────────────────────────────────────────────
+
+    @staticmethod
+    async def score_context(raw_text: str, file_name: str) -> dict:
+        """
+        Scores a document 0–100 for AI processability using a configurable rubric
+        loaded from the system_config table.
+
+        Returns:
+            {
+                "score": int,                     # 0–100
+                "routing": str,                   # "high" | "medium" | "low"
+                "breakdown": dict,                # per-category scores
+                "document_summary": str,          # one-sentence description
+                "clarification_question": str | None  # only populated when routing="low"
+            }
+        """
+        logger.info("score_context called", extra={"file_name": file_name})
+
+        rubric = await get_system_config("context_score_rubric")
+        rubric_json = json.dumps(rubric, indent=2) if rubric else "{}"
+
+        client = _get_client()
+        message = client.messages.create(
+            model=ClaudeService.MODEL,
+            max_tokens=1024,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "You are a document quality analyst for a roofing accounting platform.\n"
+                        "Evaluate the document below against the provided rubric and return ONLY valid JSON.\n\n"
+                        "RUBRIC (JSON — each key is a criterion, value is max points for that criterion):\n"
+                        f"{rubric_json}\n\n"
+                        "INSTRUCTIONS:\n"
+                        "1. For each criterion in the rubric, assign a score between 0 and its max points.\n"
+                        "2. Sum all criterion scores to get the total score (0–100).\n"
+                        "3. Write a one-sentence document_summary describing what the document appears to be.\n"
+                        "4. Set clarification_question to null unless routing is 'low' — in that case, "
+                        "write a specific, actionable question about what is missing or unclear, "
+                        "based on what you could partially detect.\n\n"
+                        "Return ONLY valid JSON matching this schema exactly:\n"
+                        "{\n"
+                        '  "score": <integer 0-100>,\n'
+                        '  "breakdown": {<criterion_name>: <points_awarded>, ...},\n'
+                        '  "document_summary": "<one sentence>",\n'
+                        '  "clarification_question": "<question or null>"\n'
+                        "}\n\n"
+                        f"File name: {file_name}\n\n"
+                        f"Document text:\n{raw_text[:6000]}"
+                    ),
+                }
+            ],
+        )
+
+        raw = message.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        result = json.loads(raw.strip())
+
+        score = int(result.get("score", 0))
+        if score >= 80:
+            routing = "high"
+        elif score >= 40:
+            routing = "medium"
+        else:
+            routing = "low"
+
+        # Enforce: clarification_question only populated when routing is "low"
+        clarification_question = result.get("clarification_question")
+        if routing != "low":
+            clarification_question = None
+
+        logger.info(
+            "score_context complete",
+            extra={"file_name": file_name, "score": score, "routing": routing},
+        )
+
+        return {
+            "score": score,
+            "routing": routing,
+            "breakdown": result.get("breakdown", {}),
+            "document_summary": result.get("document_summary", ""),
+            "clarification_question": clarification_question,
+        }
+
+    # ── Revenue Leakage Detection ────────────────────────────────────────────
+
+    @staticmethod
+    def detect_leakage(
+        line_items: list[dict],
+        pricing_reference: list[dict],
+        reference_mode: str,  # "contract" | "baseline"
+    ) -> list[dict]:
+        """
+        Compares invoice line items against pricing reference.
+        Returns list of finding dicts (empty list if no leakage found).
+
+        pricing_reference rows have: vendor_name, description, contracted_unit_price
+        (contract mode) or baseline_unit_price (baseline mode).
+
+        Returns:
+            [
+                {
+                    "description": str,
+                    "invoiced_unit_price": float,
+                    "reference_unit_price": float,
+                    "quantity": float,
+                    "leakage_amount": float,   # (invoiced - reference) * quantity
+                    "vendor_name": str,
+                    "reference_mode": str,
+                },
+                ...
+            ]
+        """
+        logger.info(
+            "detect_leakage called",
+            extra={"line_item_count": len(line_items), "reference_mode": reference_mode},
+        )
+
+        price_field = (
+            "contracted_unit_price" if reference_mode == "contract" else "baseline_unit_price"
+        )
+
+        findings: list[dict] = []
+
+        for item in line_items:
+            item_description = item.get("description", "")
+            item_vendor = item.get("vendor_name", "")
+            invoiced_unit_price = float(item.get("unit_price", 0.0))
+            quantity = float(item.get("quantity", 0.0))
+
+            # Step 1: exact match on vendor_name + description
+            matched_ref = None
+            for ref in pricing_reference:
+                if (
+                    ref.get("vendor_name", "") == item_vendor
+                    and ref.get("description", "") == item_description
+                ):
+                    matched_ref = ref
+                    break
+
+            # Step 2: case-insensitive match if exact match not found
+            if matched_ref is None:
+                item_vendor_lower = item_vendor.lower()
+                item_description_lower = item_description.lower()
+                for ref in pricing_reference:
+                    if (
+                        ref.get("vendor_name", "").lower() == item_vendor_lower
+                        and ref.get("description", "").lower() == item_description_lower
+                    ):
+                        matched_ref = ref
+                        break
+
+            # No match found — skip this line item
+            if matched_ref is None:
+                continue
+
+            reference_unit_price = float(matched_ref.get(price_field, 0.0))
+
+            # Only report overcharges (invoiced > reference)
+            if invoiced_unit_price <= reference_unit_price:
+                continue
+
+            leakage_amount = round(
+                (invoiced_unit_price - reference_unit_price) * quantity, 2
+            )
+
+            findings.append(
+                {
+                    "description": item_description,
+                    "invoiced_unit_price": invoiced_unit_price,
+                    "reference_unit_price": reference_unit_price,
+                    "quantity": quantity,
+                    "leakage_amount": leakage_amount,
+                    "vendor_name": item_vendor,
+                    "reference_mode": reference_mode,
+                }
+            )
+
+        logger.info(
+            "detect_leakage complete",
+            extra={"findings_count": len(findings)},
+        )
+        return findings

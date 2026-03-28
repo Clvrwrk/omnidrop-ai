@@ -19,6 +19,13 @@ import type {
   UpdateLocationRequest,
   UpdateLocationResponse,
   HealthResponse,
+  LeakageSummary,
+  OpsTriageQueueResponse,
+  OpsJobDetail,
+  UpdateLocationNotificationsRequest,
+  UpdateLocationNotificationsResponse,
+  TestLocationNotificationsResponse,
+  UploadPricingContractResponse,
 } from "@/lib/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -191,6 +198,70 @@ export const api = {
 
   // Health
   getHealth: () => apiFetch<HealthResponse>("/api/v1/health"),
+
+  // Analytics — Leakage (C-Suite)
+  getLeakageSummary: (params?: { period?: AnalyticsPeriod }) =>
+    apiFetch<LeakageSummary>(`/api/v1/analytics/leakage${qs(params ?? {})}`),
+
+  // Ops HITL queue (needs_clarity)
+  getOpsTriageQueue: (params?: { limit?: number; offset?: number }) =>
+    apiFetch<OpsTriageQueueResponse>(
+      `/api/v1/triage${qs({ status: "needs_clarity", ...params })}`,
+    ),
+
+  // Ops job detail (context-scored view)
+  getJobDetail: (jobId: string) =>
+    apiFetch<OpsJobDetail>(`/api/v1/jobs/${jobId}`),
+
+  // Triage actions on context-scored jobs
+  confirmTriage: (jobId: string) =>
+    apiFetch<{ job_id: string; updated_at: string }>(
+      `/api/v1/triage/${jobId}/confirm`,
+      { method: "PATCH" },
+    ),
+
+  rejectTriage: (jobId: string) =>
+    apiFetch<{ job_id: string; updated_at: string }>(
+      `/api/v1/triage/${jobId}/reject`,
+      { method: "PATCH" },
+    ),
+
+  reprocessJob: (jobId: string) =>
+    apiFetch<{ job_id: string; status: string }>(
+      `/api/v1/jobs/${jobId}/reprocess`,
+      { method: "POST" },
+    ),
+
+  // Notification settings per location
+  updateLocationNotifications: (
+    locationId: string,
+    body: UpdateLocationNotificationsRequest,
+  ) =>
+    apiFetch<UpdateLocationNotificationsResponse>(
+      `/api/v1/settings/locations/${locationId}/notifications`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
+  testLocationNotifications: (locationId: string) =>
+    apiFetch<TestLocationNotificationsResponse>(
+      `/api/v1/settings/locations/${locationId}/notifications/test`,
+      { method: "POST" },
+    ),
+
+  // Pricing contracts — POST /api/v1/settings/pricing-contracts (multipart)
+  uploadPricingContract: (file: File, organizationId: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("organization_id", organizationId);
+    return apiFetch<UploadPricingContractResponse>(
+      "/api/v1/settings/pricing-contracts",
+      {
+        method: "POST",
+        body: form,
+        headers: {}, // let browser set Content-Type with boundary
+      },
+    );
+  },
 };
 
 export { ApiError };

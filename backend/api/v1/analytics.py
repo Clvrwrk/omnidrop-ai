@@ -2,12 +2,14 @@
 OmniDrop AI — Analytics Endpoints
 GET  /api/v1/analytics/kpis
 GET  /api/v1/analytics/vendor-spend
+GET  /api/v1/analytics/leakage
 POST /api/v1/analytics/query  — Text-to-SQL agent
 """
 
 import logging
+from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from backend.services.claude_service import ClaudeService
@@ -48,6 +50,105 @@ async def get_vendor_spend(
         "group_by": group_by,
         "items": [],
         "trend": [],
+    }
+
+
+# ── Revenue Leakage Summary ──────────────────────────────────────────────────
+
+
+def _period_cutoff(period: str) -> str:
+    """Return an ISO 8601 UTC timestamp for the start of the requested period."""
+    now = datetime.now(timezone.utc)
+    if period == "7d":
+        cutoff = now - timedelta(days=7)
+    elif period == "30d":
+        cutoff = now - timedelta(days=30)
+    elif period == "90d":
+        cutoff = now - timedelta(days=90)
+    elif period == "ytd":
+        cutoff = datetime(now.year, 1, 1, tzinfo=timezone.utc)
+    else:
+        cutoff = now - timedelta(days=30)
+    return cutoff.isoformat()
+
+
+@router.get("/analytics/leakage", summary="Revenue leakage summary for C-Suite dashboard")
+async def get_leakage_summary(
+    request: Request,
+    period: str = Query(default="30d", pattern="^(7d|30d|90d|ytd)$"),
+) -> dict:
+    """
+    Returns revenue leakage summary for the authenticated org.
+    Used by /dashboard/c-suite Revenue Recovery Dashboard.
+
+    Scoped to organization via x-workos-org-id header → organization_id lookup.
+    """
+    from backend.services.supabase_client import get_or_create_organization, get_supabase_client
+
+    workos_org_id = request.headers.get("x-workos-org-id")
+    if not workos_org_id:
+        raise HTTPException(status_code=401, detail="Missing x-workos-org-id header.")
+
+    workos_org_name = request.headers.get("x-workos-org-name", "")
+    org = await get_or_create_organization(workos_org_id, workos_org_name)
+    organization_id = org.get("organization_id")
+    if not organization_id:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    cutoff = _period_cutoff(period)
+
+    try:
+        client = await get_supabase_client()
+
+        # Query revenue_findings joined with locations for location_name
+        findings_resp = await (
+            client.table("revenue_findings")
+            .select(
+                "leakage_amount, vendor_name, location_id, "
+                "locations(location_name)"
+            )
+            .eq("organization_id", organization_id)
+            .gte("created_at", cutoff)
+            .execute()
+        )
+
+        rows = findings_resp.data or []
+
+        total_leakage = sum(r.get("leakage_amount", 0.0) or 0.0 for r in rows)
+        finding_count = len(rows)
+
+        # Aggregate by location
+        location_agg: dict[str, dict] = {}
+        for r in rows:
+            loc = r.get("locations") or {}
+            loc_name = loc.get("location_name") or r.get("location_id") or "Unknown"
+            if loc_name not in location_agg:
+                location_agg[loc_name] = {"location_name": loc_name, "total_leakage": 0.0, "finding_count": 0}
+            location_agg[loc_name]["total_leakage"] += r.get("leakage_amount", 0.0) or 0.0
+            location_agg[loc_name]["finding_count"] += 1
+
+        # Aggregate by vendor
+        vendor_agg: dict[str, dict] = {}
+        for r in rows:
+            vendor = r.get("vendor_name") or "Unknown"
+            if vendor not in vendor_agg:
+                vendor_agg[vendor] = {"vendor_name": vendor, "total_leakage": 0.0, "finding_count": 0}
+            vendor_agg[vendor]["total_leakage"] += r.get("leakage_amount", 0.0) or 0.0
+            vendor_agg[vendor]["finding_count"] += 1
+
+        by_location = sorted(location_agg.values(), key=lambda x: x["total_leakage"], reverse=True)[:10]
+        by_vendor = sorted(vendor_agg.values(), key=lambda x: x["total_leakage"], reverse=True)[:10]
+
+    except Exception:
+        logger.exception("get_leakage_summary failed for org %s", organization_id)
+        raise HTTPException(status_code=500, detail="Failed to retrieve leakage summary.")
+
+    return {
+        "total_leakage": total_leakage,
+        "finding_count": finding_count,
+        "by_location": by_location,
+        "by_vendor": by_vendor,
+        "period": period,
     }
 
 

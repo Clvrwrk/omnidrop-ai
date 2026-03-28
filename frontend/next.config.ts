@@ -6,9 +6,18 @@ const nextConfig: NextConfig = {
 };
 
 export default withSentryConfig(nextConfig, {
+  // Sentry webpack plugin options
   org: process.env.SENTRY_ORG,
   project: process.env.SENTRY_PROJECT,
-  silent: true,
+
+  // Suppress Sentry CLI output during builds
+  silent: !process.env.CI,
+
+  // Upload source maps in CI only
   widenClientFileUpload: true,
+  hideSourceMaps: true,
   disableLogger: true,
+
+  // Automatically instrument Next.js App Router
+  autoInstrumentServerFunctions: true,
 });

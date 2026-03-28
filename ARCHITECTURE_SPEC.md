@@ -1,30 +1,30 @@
 # OmniDrop AI — Architecture Specification
-**Version:** 2.0.0
+**Version:** 3.0.0
 **Updated:** 2026-03-28
-**Status:** Scaffold complete. Phase 2 (business logic) pending.
+**Status:** V2 pivot complete. Phase 2 (business logic) pending.
 
 ---
 
 ## 1. System Overview
 
-OmniDrop AI is a high-volume AI document ingestion and analytics platform for roofing
-accounting teams. It ingests AccuLynx webhook events, classifies and processes both
-structured documents (Invoices, Sales Proposals) and unstructured knowledge
-(Field Manuals, MSDS sheets, Warranty documents) using a two-stage AI pipeline
-(Unstructured.io → Claude), and surfaces analytics to C-Suite users via a Next.js
-dashboard.
+OmniDrop AI is a revenue recovery and financial interrogation platform for roofing accounting
+teams. The primary objective is identifying lost revenue by cross-referencing supplier invoices
+against contracted pricing documents and proposals — surfacing overcharges at the line-item level
+across every branch of a multi-location roofing enterprise.
+
+The system ingests documents via AccuLynx webhooks and direct upload, scores each document for
+AI-processability (Context Score), classifies and extracts structured data, then runs leakage
+detection against national pricing contracts. Low-quality documents are bounced back to the
+field via Slack with a targeted clarification question. Medium-quality documents route to a
+Human-in-the-Loop review queue.
 
 ### Environment Pipeline
 ```
-localhost → omnidrop.dev → sandbox.omnidrop.dev → omnidrop.ai
+omnidrop.dev → sandbox.omnidrop.dev → omnidrop.ai
 ```
-
-Each environment has its own:
-- Supabase project (separate PostgreSQL + pgvector)
-- Render.com deployment (separate Web Service + Worker + Redis)
-- WorkOS environment
-- Hookdeck workspace
-- Sentry project
+`omnidrop.dev` is the **primary development and testing environment**.
+Each environment has its own Supabase project, Render deployment, WorkOS environment,
+Hookdeck workspace, and Sentry project.
 
 ---
 
@@ -34,16 +34,14 @@ Each environment has its own:
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  INBOUND LAYER                                                              │
 │                                                                             │
-│  AccuLynx                                                                   │
+│  AccuLynx  (or direct upload via /dashboard)                               │
 │     │  POST webhook event                                                   │
 │     ▼                                                                       │
 │  ┌──────────────────────────────────────────────────────────────────────┐  │
 │  │  Hookdeck  (Webhook Gateway)                                         │  │
-│  │  • Receives event, ACKs AccuLynx IMMEDIATELY (< 200ms)              │  │
-│  │  • Completely bypasses AccuLynx's 10-second webhook timeout         │  │
-│  │  • Queues the event internally with automatic retry logic           │  │
+│  │  • ACKs AccuLynx immediately (< 200ms)                              │  │
+│  │  • Bypasses AccuLynx 10-second webhook timeout                      │  │
 │  │  • Re-signs event with HOOKDECK_SIGNING_SECRET                      │  │
-│  │  • Delivers to FastAPI at its own generous timeout                  │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
 │     │  POST /api/v1/webhooks/acculynx  (Hookdeck-signed)                   │
 │     ▼                                                                       │
@@ -55,8 +53,9 @@ Each environment has its own:
 │  FastAPI  /api/v1/webhooks/acculynx                                        │
 │  1. Verify Hookdeck HMAC-SHA256 signature  → 401 if invalid               │
 │  2. Validate payload shape (Pydantic)       → 422 if malformed            │
-│  3. process_document.delay(job_payload)     → dispatch to Celery           │
-│  4. Return 200 OK immediately               → Hookdeck ACKed              │
+│  3. Check freemium quota                    → 402 if exceeded             │
+│  4. process_document.delay(job_payload)     → dispatch to Celery           │
+│  5. Return 200 OK immediately                                              │
 │                                                                             │
 │  ⚡ This endpoint NEVER touches Unstructured.io, Claude, or Supabase.      │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -66,36 +65,39 @@ Each environment has its own:
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  WORKER LAYER  (Render.com Background Worker — omnidrop-worker)            │
 │                                                                             │
-│  Celery Task 1: process_document                                           │
-│  ├── Fetches document bytes from AccuLynx API                             │
-│  │   (respects 10 req/sec per key rate limit — Celery rate_limit option)  │
+│  Task 1: process_document                                                  │
+│  ├── Fetches document bytes from AccuLynx API (rate_limit="10/s")         │
 │  └── Calls UnstructuredService.partition_document()                       │
-│      ┌────────────────────────────────────────────────────────────────┐   │
-│      │  Unstructured.io  (Omni-Parser)                                │   │
-│      │  • strategy="hi_res"  → Invoices, MSDS (image-heavy PDFs)     │   │
-│      │  • strategy="fast"    → Digital text PDFs, Proposals           │   │
-│      │  • strategy="auto"    → Unknown document types (default)       │   │
-│      │  Output: list of typed elements                                │   │
-│      │  [{type: "Title"|"Table"|"NarrativeText", text, metadata}]    │   │
-│      └────────────────────────────────────────────────────────────────┘   │
+│      └── Unstructured.io: strategy hi_res / fast / auto                  │
 │                                                                             │
-│  Celery Task 2: triage_document  (Triage Agent)                            │
-│  └── Claude receives plain text from Unstructured elements                │
-│      └── Classifies document type:                                        │
-│          ├── "structured"   → Invoice, Sales Proposal, Purchase Order     │
-│          └── "unstructured" → Field Manual, MSDS, Warranty, Spec Sheet    │
-│                                                                             │
-│  ┌──────────────────────────┐    ┌──────────────────────────────────────┐  │
-│  │  Path A: STRUCTURED      │    │  Path B: UNSTRUCTURED                │  │
-│  │                          │    │                                      │  │
-│  │  Task 3a: extract_struct │    │  Task 3b: chunk_and_embed            │  │
-│  │  Claude extracts strict  │    │  Claude chunks text semantically     │  │
-│  │  JSON schema:            │    │  → Generates vector embeddings       │  │
-│  │  {vendor, invoice_num,   │    │  → Saves to pgvector for RAG        │  │
-│  │   total, line_items...}  │    │  → Enables semantic search over     │  │
-│  │  → Saves to Supabase     │    │    knowledge base                   │  │
-│  │    relational tables     │    └──────────────────────────────────────┘  │
-│  └──────────────────────────┘                                              │
+│  Task 2: score_context  ← NEW                                              │
+│  └── Claude evaluates against configurable rubric (from system_config)    │
+│      ├── LOW  (0–39):   ──────────────────────────────────────────────┐   │
+│      ├── MEDIUM (40–79): ──────────────────────────────┐             │   │
+│      └── HIGH (80–100): ─────────────────┐            │             │   │
+│                                          ▼            ▼             ▼   │
+│  Task 3: triage_document             triage        triage       bounce   │
+│  └── Claude classifies:              (flagged)                   _back   │
+│      ├── "structured"  → Task 4a                                       │
+│      └── "unstructured"→ Task 4b                                       │
+│                                                                           │
+│  Task 4a: extract_struct  (structured path)                              │
+│  └── Claude extracts JSON with per-field confidence scores              │
+│      ├── HIGH context  → Task 5: detect_revenue_leakage                │
+│      └── MEDIUM context→ mark triage_status='needs_clarity'            │
+│                           surface in /dashboard/ops queue              │
+│                                                                           │
+│  Task 4b: chunk_and_embed  (unstructured path)                          │
+│  └── Claude chunks → Voyage AI embeddings → pgvector                   │
+│                                                                           │
+│  Task 5: detect_revenue_leakage  ← NEW                                  │
+│  ├── Contract Mode: compare line items vs pricing_contracts             │
+│  └── Baseline Mode: compare vs vendor_baseline_prices view (fallback)  │
+│      └── Write findings → revenue_findings table                       │
+│                                                                           │
+│  Side path: bounce_back  ← NEW  (LOW context only)                      │
+│  └── NotificationService → SlackAdapter → POST to webhook URL           │
+│      └── Message includes deep link to /dashboard/ops/jobs/[id]        │
 └─────────────────────────────────────────────────────────────────────────────┘
      │  Supabase writes
      ▼
@@ -103,92 +105,355 @@ Each environment has its own:
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  DATA LAYER  (Supabase)                                                    │
 │                                                                             │
-│  PostgreSQL tables (structured data):                                      │
-│    jobs, intake_events, documents, line_items, invoices                    │
+│  Tenant hierarchy:  organizations → locations → jobs → documents          │
+│                                  ↘ pricing_contracts (org-level)          │
+│                                  ↘ revenue_findings  (org + location)     │
 │                                                                             │
-│  pgvector table (unstructured knowledge — RAG):                            │
-│    document_embeddings  →  enables semantic search over manuals/MSDS       │
+│  Structured:  jobs, documents, invoices, line_items                        │
+│  Leakage:     pricing_contracts, revenue_findings                          │
+│  Vector RAG:  document_embeddings (pgvector 1024-dim)                      │
+│  AI Config:   system_config (rubric weights), context_reference_examples   │
+│  Audit:       bounce_back_log                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
      │  Next.js data fetching
      ▼
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  PRESENTATION LAYER  (Next.js 15 — Vercel / Render Static)                │
+│  PRESENTATION LAYER  (Next.js 15)                                          │
 │                                                                             │
-│  WorkOS AuthKit protects all routes (SSO / Magic Links)                   │
+│  WorkOS AuthKit — SSO / Magic Links / SCIM                                │
 │                                                                             │
-│  /dashboard   → Celery task status, recent intake events (Tremor charts)  │
-│  /analytics   → C-Suite KPIs: volume, accuracy, processing time           │
-│  /search      → Semantic search over unstructured knowledge (RAG)         │
-│  /settings    → WorkOS user management, AccuLynx connection config        │
+│  /dashboard/c-suite  → Revenue Recovery Dashboard (org-scoped, C-Suite)   │
+│  /dashboard/ops      → "Needs Clarity" HITL queue (Accountant/Ops)        │
+│  /dashboard/ops/jobs/[id] → Document review + Slack deep link target      │
+│  /search             → RAG semantic search (knowledge base)               │
+│  /settings           → Location config: AccuLynx key + Slack webhook URL  │
+│  /onboarding         → 5-step wizard (new customer activation flow)       │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. Why Hookdeck Solves the AccuLynx 10-Second Timeout
+## 3. Context Score Engine
 
-AccuLynx retries webhooks if it doesn't receive a 200–299 within **10 seconds**.
+### Purpose
+Evaluated immediately after Unstructured.io parses a document. Determines whether the AI
+has enough context to process the document autonomously, route it for human review, or
+bounce it back to the field for clarification.
 
-**Without Hookdeck (risky):**
-```
-AccuLynx → FastAPI → must process OR dispatch AND respond in < 10s
-           └─ risk: slow Celery broker connection causes AccuLynx to retry → duplicate jobs
-```
+### Phase 1 — Rubric-Based Scoring (alpha launch)
+The rubric is stored in `system_config` table under key `context_score_rubric`. The
+`score_context` task reads it at runtime and injects it into the Claude prompt.
+This allows recalibration via a single SQL update — no code deploy required.
 
-**With Hookdeck (safe):**
-```
-AccuLynx → Hookdeck (ACKs in < 200ms ✓) → queue → FastAPI → 200 to Hookdeck
-```
-
-Hookdeck owns the AccuLynx relationship entirely. FastAPI only needs to satisfy
-Hookdeck's delivery timeout (configurable, far more generous). AccuLynx never
-waits on our infrastructure.
-
----
-
-## 4. Document Processing Pipeline Details
-
-### Unstructured.io Strategy Selection
-| Document Type | Strategy | Reason |
-|---------------|----------|--------|
-| Roofing Invoice (scanned PDF) | `hi_res` | Requires OCR + layout analysis |
-| Sales Proposal (digital PDF) | `fast` | Clean text, no OCR needed |
-| MSDS Sheet | `hi_res` | Complex layout, tables, safety symbols |
-| Field Manual | `fast` or `auto` | Usually digital text |
-| Unknown type | `auto` | Unstructured picks the best strategy |
-
-### Claude Triage Prompt Design (Phase 2)
-The Triage Agent (Task 2) receives plain text and must classify into exactly:
-- `"structured"` — contains line items, totals, dates, vendor info
-- `"unstructured"` — reference/safety/instructional content
-- `"unknown"` — insufficient content to classify (log and skip)
-
-### Structured Extraction Schema (Target — Phase 2)
+**Default rubric (seed into system_config at migration time):**
 ```json
 {
-  "vendor_name": "string",
-  "invoice_number": "string",
-  "invoice_date": "ISO 8601 date",
-  "due_date": "ISO 8601 date | null",
-  "subtotal": "float",
-  "tax": "float",
-  "total": "float",
-  "line_items": [
-    {"description": "string", "quantity": "float", "unit_price": "float", "amount": "float"}
-  ],
-  "notes": "string | null"
+  "identifiability": {
+    "vendor_name_present": 15,
+    "job_or_po_number_present": 10,
+    "date_present": 5
+  },
+  "content_quality": {
+    "legible_machine_readable_text": 20,
+    "financial_data_present": 15,
+    "document_type_unambiguous": 5
+  },
+  "metadata_and_context": {
+    "file_metadata_present": 10,
+    "linkable_to_known_vendor_or_job": 10,
+    "specific_enough_to_act_on": 10
+  }
+}
+```
+Maximum score: 100. Thresholds: HIGH ≥ 80, MEDIUM 40–79, LOW ≤ 39.
+
+The Claude prompt returns:
+```json
+{
+  "score": 65,
+  "routing": "medium",
+  "breakdown": {"identifiability": 20, "content_quality": 30, "metadata_and_context": 15},
+  "document_summary": "Appears to be an ABC Supply invoice — vendor name present but no job number",
+  "clarification_question": "Which AccuLynx job number does this invoice belong to?"
 }
 ```
 
+`clarification_question` is only populated when `routing = "low"` — used directly in the
+Slack bounce-back message. Single Claude API call; no separate prompt for the question.
+
+### Phase 1.5 — Rubric Recalibration (post-alpha)
+After accumulating data from multiple alpha customers, recalibrate rubric weights using
+anonymized cross-customer patterns. Documents that scored medium but humans consistently
+upgraded across all orgs indicate a miscalibrated threshold. Recalibration = SQL update to
+`system_config`. Score distributions before/after are logged for audit.
+
+### Phase 2 — Vector Enhancement (post-alpha, per-org)
+Layer in vector similarity as a secondary ±15 point adjustment once an org has 500+
+labeled examples in `context_reference_examples`. The rubric score remains the foundation.
+`context_reference_examples` is populated automatically by HITL corrections in the
+Ops dashboard — no manual seeding required.
+
+```
+final_score = clamp(rubric_score + vector_adjustment, 0, 100)
+```
+
 ---
 
-## 5. Complete Tech Stack
+## 4. Revenue Leakage Detection
+
+### Purpose
+The core "Aha moment" feature. Compares extracted invoice line items against reference pricing
+at the `organization_id` scope (not location-scoped), enabling a national roofing company to
+detect when one branch is paying above the contracted national rate.
+
+### Two Pricing Reference Modes
+
+**Contract Mode** — customer has uploaded a formal pricing document:
+- Claude extracts vendor/SKU/price rows from the uploaded document into `pricing_contracts`
+- `detect_revenue_leakage` queries by `organization_id` + vendor_name
+- Finding: invoiced unit price > contracted unit price by any amount
+
+**Baseline Mode** — no formal contract, use invoice history as reference:
+- `vendor_baseline_prices` view computes 90-day rolling average unit price per org/vendor/SKU
+- Requires ≥ 3 invoice samples for a reliable baseline
+- Finding: invoiced unit price > baseline × (1 + threshold), default threshold = 10%
+- Findings labeled distinctly: "Paid 20% above your 90-day average" vs "Paid above contracted rate"
+
+**No Reference** — neither mode available:
+- `leakage_skipped_reason = 'no_pricing_reference'` logged to job record
+- Ops dashboard prompts the customer to upload a pricing contract
+
+### Finding Output (written to `revenue_findings`)
+```
+leakage_amount = (invoiced_unit_price - reference_unit_price) × quantity
+```
+Aggregated at C-Suite level: "Idaho Branch paid $42/bundle vs. national contract $35/bundle.
+Total overcharge on this batch: $2,800."
+
+---
+
+## 5. Notification System (Bounce-Back)
+
+### Purpose
+When a document scores LOW context (0–39), do not route to the Ops queue. Immediately notify
+the responsible party at the point of ingestion with a targeted clarification question.
+
+### Channel-Agnostic Architecture
+Each location stores its notification configuration in `locations.notification_channels JSONB`:
+
+```json
+{
+  "slack": {
+    "webhook_url": "https://hooks.slack.com/services/...",
+    "channel": "#field-ops"
+  }
+}
+```
+
+Future adapters (same interface, no task changes required):
+```json
+{
+  "acculynx": { "enabled": true },
+  "signal": { "phone": "+15551234567" }
+}
+```
+
+`AccuLynxAdapter` uses the location's existing `acculynx_api_key` to call
+`POST /jobs/{acculynx_job_id}/messages`. Include `@mention` syntax in the message body
+as best-effort notification — behavior must be tested to confirm the AccuLynx notification
+engine fires on API-created messages.
+
+### Alpha: Slack Incoming Webhook (one-way, no bot required)
+Slack message format:
+```
+*OmniDrop — Document Needs Clarification*
+
+📍 Location: [location name]
+📄 Job: [acculynx_job_id]  |  File: [filename]
+🔍 What we detected: [document_summary from score_context]
+
+*Question:*
+[clarification_question from score_context]
+
+➡️  View document: https://omnidrop.dev/dashboard/ops/jobs/[job_id]
+```
+
+The deep link to `/dashboard/ops/jobs/[job_id]` is the response surface — the field
+salesperson clicks through and either re-uploads or answers via the Ops HITL interface.
+No Slack bot, no reply-capture infrastructure required for alpha.
+
+### `bounce_back_log` Table
+Every bounce-back is logged for: bounce rate analytics, identifying locations with no channel
+configured, and audit trail.
+
+---
+
+## 6. Freemium Tier
+
+| Limit | Free Tier | Pro | Enterprise |
+|---|---|---|---|
+| Documents | 500 | Unlimited | Unlimited |
+| Users | 5 | Unlimited | Unlimited |
+| Pricing contracts | 1 | Unlimited | Unlimited |
+| Locations | 1 | Unlimited | Unlimited |
+
+`organizations.plan_tier` values: `'free'` | `'pro'` | `'enterprise'`
+`organizations.max_documents` default: `500`
+`organizations.documents_processed` increments on each `status='complete'` job update.
+
+Freemium gate enforced at both webhook endpoint and manual upload endpoint (return 402).
+
+### Onboarding Wizard (`/onboarding`)
+Five-step flow designed to deliver the Aha moment (found revenue) within the first batch:
+
+1. **Company Setup** — name, timezone, invite up to 5 teammates
+2. **Connect Location** — location name + AccuLynx API key + Slack webhook URL
+3. **Unlock Revenue Detection** — upload pricing contract (PDF/spreadsheet) OR skip to Baseline Mode
+   - Copy: "Customers who complete this step find an average of $8,400 in overcharges within their first 50 invoices."
+   - Skip option: "Use my invoice history as the baseline instead"
+4. **Process First Batch** — drag-and-drop upload zone; invoices prioritized over unstructured docs
+5. **Your First Findings** — dashboard surfaces leakage findings prominently
+
+Step 3 activates Contract Mode or Baseline Mode. Either path produces leakage findings.
+Alpha delivery is sales-assisted — the wizard does not need to be fully self-serve for launch.
+
+---
+
+## 7. Database Schema
+
+### Tenant Hierarchy
+```
+organizations (company root — national roofing enterprise)
+  └── locations (individual branches — AccuLynx API key bound here)
+        └── jobs (one per document processed)
+              └── documents
+                    ├── invoices + line_items  (structured path)
+                    └── document_embeddings    (unstructured path)
+
+organizations → pricing_contracts  (national contracts, org-scoped NOT location-scoped)
+organizations + locations → revenue_findings  (leakage findings, queryable both ways)
+```
+
+### Key Tables
+
+```sql
+-- Tenant root
+organizations (
+  organization_id   UUID PK,
+  workos_org_id     TEXT UNIQUE,
+  name              TEXT NOT NULL,
+  plan_tier         TEXT DEFAULT 'free',        -- 'free' | 'pro' | 'enterprise'
+  max_documents     INTEGER DEFAULT 500,
+  documents_processed INTEGER DEFAULT 0,
+  max_users         INTEGER DEFAULT 5,
+  created_at        TIMESTAMPTZ DEFAULT NOW()
+)
+
+-- Branches (AccuLynx API key bound here)
+locations (
+  location_id           UUID PK,
+  organization_id       UUID FK → organizations,
+  user_id               TEXT,
+  name                  TEXT NOT NULL,
+  acculynx_api_key      TEXT,
+  connection_status     TEXT DEFAULT 'pending',
+  notification_channels JSONB DEFAULT '{}',     -- {"slack": {"webhook_url": "..."}}
+  created_at            TIMESTAMPTZ DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ DEFAULT NOW()
+)
+
+-- National pricing contracts (org-scoped — enables cross-branch leakage detection)
+pricing_contracts (
+  contract_id           UUID PK,
+  organization_id       UUID FK → organizations,
+  vendor_name           TEXT NOT NULL,
+  sku                   TEXT,
+  description           TEXT,
+  contracted_unit_price NUMERIC(12,2) NOT NULL,
+  effective_date        DATE,
+  expiry_date           DATE,
+  source_document_id    UUID,                    -- FK to documents if extracted from a file
+  created_at            TIMESTAMPTZ DEFAULT NOW()
+)
+
+-- Revenue leakage findings
+revenue_findings (
+  finding_id            UUID PK,
+  organization_id       UUID FK → organizations,
+  location_id           UUID FK → locations,
+  invoice_id            UUID FK → invoices,
+  line_item_id          UUID FK → line_items,
+  contract_id           UUID FK → pricing_contracts,  -- null if Baseline Mode
+  reference_mode        TEXT NOT NULL,           -- 'contract' | 'baseline'
+  vendor_name           TEXT,
+  sku                   TEXT,
+  invoiced_unit_price   NUMERIC(12,2),
+  reference_unit_price  NUMERIC(12,2),
+  quantity              NUMERIC(12,4),
+  leakage_amount        NUMERIC(12,2),           -- (invoiced - reference) × quantity
+  created_at            TIMESTAMPTZ DEFAULT NOW()
+)
+
+-- Bounce-back audit log
+bounce_back_log (
+  log_id          UUID PK,
+  job_id          UUID FK → jobs,
+  location_id     UUID FK → locations,
+  organization_id UUID FK → organizations,
+  context_score   INTEGER NOT NULL,
+  channel_used    TEXT NOT NULL,                 -- 'slack' | 'acculynx' | 'signal' | 'none'
+  message_sent    TEXT NOT NULL,
+  delivery_status TEXT NOT NULL,                 -- 'sent' | 'failed' | 'no_channel'
+  sent_at         TIMESTAMPTZ DEFAULT NOW()
+)
+
+-- AI configuration (rubric weights live here)
+system_config (
+  key        TEXT PRIMARY KEY,
+  value      JSONB NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+)
+-- Seed: INSERT INTO system_config (key, value) VALUES ('context_score_rubric', '{...}')
+
+-- Labeled examples for Phase 2 vector enhancement (populated by HITL corrections)
+context_reference_examples (
+  example_id      UUID PK,
+  organization_id UUID FK → organizations,
+  document_id     UUID FK → documents,
+  label           TEXT NOT NULL,                 -- 'high' | 'medium' | 'low'
+  label_source    TEXT NOT NULL,                 -- 'hitl_correction' | 'manual_seed'
+  rubric_score    INTEGER NOT NULL,
+  embedding       vector(1024),
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+)
+```
+
+### Baseline Prices View
+```sql
+CREATE VIEW vendor_baseline_prices AS
+SELECT
+  organization_id,
+  vendor_name,
+  description,
+  AVG(unit_price)    AS baseline_unit_price,
+  STDDEV(unit_price) AS price_stddev,
+  COUNT(*)           AS sample_count
+FROM line_items li
+JOIN invoices i USING (invoice_id)
+WHERE i.created_at > NOW() - INTERVAL '90 days'
+GROUP BY organization_id, vendor_name, description
+HAVING COUNT(*) >= 3;
+```
+
+---
+
+## 8. Complete Tech Stack
 
 | Layer | Technology | Package / Version |
-|-------|-----------|-------------------|
+|---|---|---|
 | Frontend | Next.js 15 (App Router) | `next@^15` |
-| Frontend UI | Shadcn/UI + Tremor charts | `@tremor/react@^3` (Tailwind v3) |
+| Frontend UI | Shadcn/UI + Tremor | `@tremor/react@^3` (Tailwind v3) |
 | Auth | WorkOS AuthKit | `@workos-inc/authkit-nextjs` |
 | Error Tracking (FE) | Sentry | `@sentry/nextjs@^8` |
 | Backend API | FastAPI + Pydantic v2 | `fastapi@^0.115` |
@@ -196,218 +461,203 @@ The Triage Agent (Task 2) receives plain text and must classify into exactly:
 | Task Queue | Celery + Redis | `celery[redis]@^5.4` |
 | Document Parsing | Unstructured.io | `unstructured-client@^0.25` |
 | AI Reasoning | Anthropic Claude | `anthropic@^0.30` (model: claude-opus-4-6) |
+| Embeddings | Voyage AI | `voyageai` (voyage-3, 1024-dim) |
 | Error Tracking (BE) | Sentry | `sentry-sdk[fastapi]@^2` |
 | Database | Supabase (PostgreSQL) | `supabase@^2` |
-| Vector Search | pgvector (Supabase extension) | enabled via migration |
-| Hosting (API + Worker) | Render.com | `render.yaml` Blueprint |
-| Local Dev | Docker Compose | Redis + FastAPI + Celery worker |
-| CI/CD | GitHub Actions | `.github/workflows/` |
+| Vector Search | pgvector | enabled via migration |
+| Notifications | Slack Incoming Webhooks | alpha; no additional package |
+| Hosting | Render.com | `render.yaml` Blueprint |
+| Local Dev | Docker Compose | Redis + FastAPI + Celery (convenience only) |
+| CI/CD | GitHub Actions | `.github/workflows/deploy-dev.yml` |
 
 ---
 
-## 6. Render.com Deployment Architecture
+## 9. Render.com Deployment Architecture
 
 ```
-Render.com Environment
+Render.com Environment (omnidrop.dev)
 ├── omnidrop-api      (Web Service — FastAPI)
-│   ├── build: pip install -r backend/requirements.txt
 │   └── start: uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT
 │
 ├── omnidrop-worker   (Background Worker — Celery)
-│   ├── build: pip install -r backend/requirements.txt
 │   └── start: celery -A backend.workers.celery_app worker --loglevel=info --concurrency=4
 │
 ├── omnidrop-redis    (Key Value — Redis)
-│   └── maxmemoryPolicy: noeviction  (tasks NEVER silently dropped)
+│   └── maxmemoryPolicy: noeviction
 │
-└── omnidrop-flower   (Web Service — Celery Monitoring UI, optional)
-    └── start: celery -A backend.workers.celery_app flower
+└── omnidrop-flower   (optional — Celery monitoring UI)
 ```
 
-All secrets are managed via a **Render Environment Group** (`omnidrop-secrets`).
-The Redis connection string is automatically injected via `fromService` reference —
-no manual copy-paste of Redis URLs.
+Secrets managed via Render Environment Group `omnidrop-secrets`.
 
 ---
 
-## 7. AccuLynx API Constraints (Non-Negotiable)
+## 10. AccuLynx API Constraints
 
 | Constraint | Value | Handled By |
-|------------|-------|------------|
+|---|---|---|
 | Webhook response timeout | 10 seconds | Hookdeck (ACKs in < 200ms) |
-| Rate limit per IP | 30 req/sec | Celery `rate_limit` task option |
+| Rate limit per IP | 30 req/sec | Celery `rate_limit` |
 | Rate limit per API key | 10 req/sec | Celery `rate_limit="10/s"` on fetch tasks |
-| Webhook signature | HMAC-SHA256 | `backend/core/security.py` (Hookdeck secret) |
-| 429 monitoring | — | Sentry (`failed_request_status_codes={429}`) |
+| Webhook signature | HMAC-SHA256 | `backend/core/security.py` |
+| 429 monitoring | — | Sentry `failed_request_status_codes={429}` |
+| Job message API | POST /jobs/{id}/messages | Used by AccuLynxAdapter in bounce_back |
 
 ---
 
-## 8. Auth Layer (WorkOS)
+## 11. Auth Layer (WorkOS)
 
 ```
 Browser request
-   │
    ▼
-Next.js Middleware  (authkitMiddleware)
-   │  Checks session cookie on every protected route
-   │  Redirects to WorkOS hosted sign-in if unauthenticated
+Next.js Middleware (authkitMiddleware) — all routes except /api/v1/webhooks/* and /callback
    ▼
-WorkOS AuthKit  (hosted UI)
-   │  SSO, Magic Links, MFA
+WorkOS AuthKit (SSO, Magic Links, MFA, SCIM)
    ▼
-/callback  (handleAuth())
-   │  Exchanges authorization code for encrypted session cookie
+/callback (handleAuth()) — exchanges code for encrypted session cookie
    ▼
-Protected page  (withAuth() server / useAuth() client)
+Role-based routing:
+  C-Suite role    → /dashboard/c-suite
+  Ops/Accountant  → /dashboard/ops
+  Admin           → /settings
 ```
-
-Public routes (no auth required):
-- `/api/v1/webhooks/*` — authenticated by Hookdeck signature instead
-- `/callback` — WorkOS callback
 
 ---
 
-## 9. Security Model
+## 12. Security Model
 
 | Concern | Implementation |
-|---------|---------------|
-| User authentication | WorkOS AuthKit (SSO, Magic Links, MFA) |
-| Webhook verification | `HOOKDECK_SIGNING_SECRET` (HMAC-SHA256 in `backend/core/security.py`) |
-| AccuLynx API key | Env var only — Render Environment Group |
+|---|---|
+| User auth | WorkOS AuthKit (SSO, Magic Links, MFA) |
+| Webhook verification | `HOOKDECK_SIGNING_SECRET` HMAC-SHA256 |
+| AccuLynx API key | Per-location, stored in Supabase, fetched at task runtime |
 | Supabase service role key | Server-side only — never in frontend |
 | Celery task data | Passes only job IDs + event metadata — no raw secrets |
 | CORS | Environment-specific allow-list in `backend/core/config.py` |
 | API docs | `/docs` disabled when `APP_ENV=production` |
-| Supabase RLS | TODO: Phase 2 |
+| Supabase RLS | Scoped by `organization_id` — Phase 2 |
+| Freemium quota | Enforced at API layer before Celery dispatch |
 
 ---
 
-## 10. Folder Structure
+## 13. Folder Structure
 
 ```
 omnidrop-ai/
-├── frontend/                      # Next.js 15 Application
-│   ├── app/                       # App Router pages
-│   │   ├── dashboard/page.tsx     # Task status + recent events (Tremor)
-│   │   ├── analytics/page.tsx     # C-Suite KPIs
-│   │   ├── settings/page.tsx      # Config + WorkOS user management
-│   │   ├── callback/route.ts      # WorkOS auth callback
+├── frontend/
+│   ├── app/
+│   │   ├── dashboard/
+│   │   │   ├── c-suite/page.tsx     # Revenue Recovery Dashboard
+│   │   │   ├── ops/page.tsx         # HITL "Needs Clarity" queue
+│   │   │   └── ops/jobs/[id]/page.tsx  # Document review + Slack deep link target
+│   │   ├── search/page.tsx          # RAG semantic search
+│   │   ├── settings/page.tsx        # Location config + Slack webhook URL
+│   │   ├── onboarding/page.tsx      # 5-step activation wizard
+│   │   ├── callback/route.ts        # WorkOS auth callback
 │   │   └── layout.tsx
-│   ├── components/ui/             # Shadcn + Tremor chart components
+│   ├── components/ui/               # Shadcn + Tremor components
 │   ├── lib/
-│   │   ├── supabase.ts            # Supabase browser client
-│   │   └── api-client.ts          # Typed fetch wrapper for FastAPI
-│   ├── middleware.ts               # WorkOS authkitMiddleware
-│   └── package.json
+│   │   ├── supabase.ts
+│   │   └── api-client.ts
+│   └── middleware.ts
 │
-├── backend/                       # FastAPI + Celery (single codebase, two Render services)
+├── backend/
 │   ├── api/
-│   │   ├── main.py                # FastAPI entrypoint (Sentry init, CORS, routes)
+│   │   ├── main.py
 │   │   └── v1/
-│   │       └── webhooks.py        # POST /api/v1/webhooks/acculynx
+│   │       ├── webhooks.py          # Critical endpoint
+│   │       ├── documents.py         # Manual upload
+│   │       ├── organizations.py
+│   │       ├── settings.py          # Location + notification channel management
+│   │       ├── analytics.py         # KPIs + leakage summary
+│   │       ├── search.py
+│   │       └── triage.py
 │   ├── core/
-│   │   ├── config.py              # Pydantic BaseSettings (all env vars)
-│   │   ├── security.py            # Hookdeck signature verification
-│   │   ├── sentry.py              # Sentry init (429 + 5xx capture)
-│   │   └── logging.py             # Structured JSON logging
-│   ├── workers/                   # Celery tasks (run by omnidrop-worker on Render)
-│   │   ├── celery_app.py          # Celery app configuration
-│   │   └── intake_tasks.py        # process_document, triage, extract, chunk_and_embed
-│   ├── services/                  # Business logic (called from Celery tasks)
-│   │   ├── unstructured_service.py  # Unstructured.io Omni-Parser wrapper
-│   │   ├── claude_service.py        # Anthropic Claude triage + extraction
-│   │   ├── supabase_client.py       # Supabase async client
-│   │   └── temporal_client.py       # SUPERSEDED — kept for reference, not used
+│   │   ├── config.py
+│   │   ├── security.py
+│   │   ├── sentry.py
+│   │   └── logging.py
+│   ├── workers/
+│   │   ├── celery_app.py
+│   │   └── intake_tasks.py          # All 7 tasks
+│   ├── services/
+│   │   ├── unstructured_service.py
+│   │   ├── claude_service.py
+│   │   ├── notification_service.py  # SlackAdapter + future adapters
+│   │   └── supabase_client.py
 │   └── requirements.txt
 │
-├── shared/                        # Shared Python package (Pydantic models)
+├── shared/
 │   ├── models/
-│   │   ├── acculynx.py            # AccuLynx webhook payload models
-│   │   └── jobs.py                # Job input/output models
-│   └── constants.py               # Rate limits, task queue names
+│   │   ├── acculynx.py
+│   │   └── jobs.py
+│   └── constants.py
 │
 ├── supabase/
 │   ├── migrations/
-│   │   └── 00001_init.sql         # pgvector extension, placeholder tables
-│   └── seed.sql
+│   │   ├── 00001_init.sql                  # pgvector + uuid extensions
+│   │   ├── 00002_application_tables.sql    # locations, jobs, documents, invoices, line_items, document_embeddings
+│   │   ├── 00003_organizations.sql         # organizations table + org_id columns on all tables
+│   │   └── 00004_v3_pivot.sql              # V3 additions: freemium cols, notification_channels,
+│   │                                       # pricing_contracts, revenue_findings, bounce_back_log,
+│   │                                       # system_config (+ rubric seed), context_reference_examples,
+│   │                                       # vendor_baseline_prices view, extended CHECK constraints
 │
-├── docker-compose.yml             # Local dev: Redis + FastAPI + Celery worker
-├── render.yaml                    # Render.com Infrastructure as Code
-├── Makefile                       # lint, test, dev, migrate targets
-├── .env.example                   # All env var placeholders
-├── .gitignore
-└── ARCHITECTURE_SPEC.md           # This document
+├── docker-compose.yml
+├── render.yaml
+├── Makefile
+├── .env.example
+└── ARCHITECTURE_SPEC.md
 ```
 
 ---
 
-## 11. Local Development Quickstart
+## 14. What Is NOT Yet Implemented
 
-```bash
-# 1. Clone and copy env
-cp .env.example .env
-# Fill in .env with real credentials
+### Database (start here — blocks everything else)
+- [x] `00002_application_tables.sql` — core tables exist
+- [x] `00003_organizations.sql` — organizations + org_id FK columns exist
+- [x] `00004_v3_pivot.sql` — V3 additions: freemium cols, notification_channels, new tables, rubric seed, view
+- [ ] Supabase RLS policies (scoped by `organization_id`) — stubs enabled, policies not yet written
 
-# 2. Install Python dependencies
-pip install -e ./shared
-pip install -r backend/requirements.txt
-
-# 3. Install frontend dependencies
-cd frontend && npm install && cd ..
-
-# 4. Start Redis (required for Celery)
-docker compose up -d redis
-
-# 5. Start FastAPI backend
-cd backend && uvicorn backend.api.main:app --reload --port 8000
-
-# 6. Start Celery worker (separate terminal)
-cd backend && celery -A backend.workers.celery_app worker --loglevel=info --concurrency=2
-
-# 7. Start frontend (separate terminal)
-cd frontend && npm run dev
-
-# 8. Apply Supabase migrations
-supabase db push
-
-# Optional: RedisInsight task queue monitor
-docker compose --profile debug up redisinsight
-# → http://localhost:8001
-```
-
-**Service URLs:**
-- Backend API docs: http://localhost:8000/docs
-- Frontend: http://localhost:3000
-- RedisInsight: http://localhost:8001 (debug profile only)
-
----
-
-## 12. What Is NOT Yet Implemented (Phase 2)
-
-- [ ] AccuLynx API client (fetch document bytes in `process_document` task)
-- [ ] Hookdeck HMAC signature verification (`backend/core/security.py`)
+### Backend Pipeline
+- [ ] AccuLynx API client (`fetch_acculynx_document` task)
+- [ ] Hookdeck HMAC verification (`backend/core/security.py`)
 - [ ] `UnstructuredService.partition_document()` implementation
-- [ ] `ClaudeService.classify_document()` — Triage Agent prompt
-- [ ] `ClaudeService.extract_invoice_schema()` — Structured extraction
-- [ ] `ClaudeService.chunk_for_rag()` — Unstructured chunking + embeddings
-- [ ] Supabase table migrations (jobs, documents, line_items, document_embeddings)
-- [ ] Supabase RLS policies
-- [ ] WorkOS middleware + callback route (uncomment stubs in `frontend/`)
-- [ ] Sentry wizard (`npx @sentry/wizard@latest -i nextjs`)
-- [ ] Tremor dashboard components (`frontend/app/dashboard/`)
-- [ ] Render Environment Group `omnidrop-secrets` (create in Render dashboard before first deploy)
-- [ ] Deploy targets in `.github/workflows/deploy-dev.yml`
+- [ ] `ClaudeService.score_context()` — rubric from `system_config`, single API call
+- [ ] `ClaudeService.classify_document()` — Triage Agent
+- [ ] `ClaudeService.extract_invoice_schema()` — confidence-scored extraction
+- [ ] `ClaudeService.chunk_for_rag()` — chunking + Voyage AI embeddings
+- [ ] `ClaudeService.detect_leakage()` — Contract Mode + Baseline Mode
+- [ ] `score_context` Celery task (routing gate)
+- [ ] `bounce_back` Celery task
+- [ ] `detect_revenue_leakage` Celery task
+- [ ] `notification_service.py` — `SlackAdapter`
+- [ ] Freemium quota check in webhook + upload endpoints
+
+### Frontend
+- [ ] WorkOS middleware + `/callback` route
+- [ ] Sentry initialization
+- [ ] `/dashboard/c-suite` — revenue recovery + cross-branch leakage Tremor charts
+- [ ] `/dashboard/ops` — HITL "Needs Clarity" queue
+- [ ] `/dashboard/ops/jobs/[id]` — split-screen document review
+- [ ] `/onboarding` — 5-step activation wizard
+- [ ] `/settings` — location config with Slack webhook URL + test button
+- [ ] Freemium usage counter in layout
+
+### Deployment
+- [ ] Render Environment Group `omnidrop-secrets` (omnidrop.dev)
+- [ ] `.github/workflows/deploy-dev.yml`
+- [ ] Hookdeck workspace → omnidrop.dev URL
 
 ---
 
-## 13. Superseded Components (Kept for Reference)
-
-The following were part of an earlier architecture iteration and have been superseded.
-They remain in the repo for reference but are not used by the current pipeline:
+## 15. Superseded Components
 
 | Component | Location | Superseded By |
-|-----------|----------|---------------|
+|---|---|---|
 | Temporal.io workers | `workers/` (top-level) | Celery in `backend/workers/` |
 | Azure Document Intelligence | `workers/activities/ocr_activities.py` | Unstructured.io |
-| Merge.dev accounting push | `workers/activities/accounting_activities.py` | Out of current scope |
+| Merge.dev accounting push | `workers/activities/accounting_activities.py` | Out of scope |
 | `backend/services/temporal_client.py` | — | Celery `process_document.delay()` |
+| `/app/analytics/page.tsx` | `frontend/app/analytics/` | `/dashboard/c-suite` |

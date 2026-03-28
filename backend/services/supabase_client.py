@@ -123,3 +123,18 @@ async def get_location_api_key(location_id: str) -> str:
     if not result.data or not result.data.get("acculynx_api_key"):
         raise ValueError(f"No API key found for location {location_id}")
     return result.data["acculynx_api_key"]
+
+
+async def get_system_config(key: str) -> dict | None:
+    """Fetch a config value from the system_config table by key."""
+    client = await get_supabase_client()
+    result = (
+        await client.table("system_config")
+        .select("value")
+        .eq("key", key)
+        .single()
+        .execute()
+    )
+    if result.data:
+        return result.data["value"]
+    return None
