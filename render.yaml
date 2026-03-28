@@ -91,32 +91,11 @@ services:
     ipAllowList: []   # Only accessible internally to services in this blueprint
 
   # ---------------------------------------------------------------------------
-  # 4. Next.js Frontend
-  #    Serves the dashboard at omnidrop.dev.
-  #    Custom domain: set omnidrop.dev in Render Dashboard → omnidrop-frontend
-  #    → Settings → Custom Domains. Add CNAME at Namecheap pointing @ to
-  #    the Render-provided hostname.
+  # 4. Next.js Frontend — TEMPORARILY REMOVED FROM BLUEPRINT
+  #    The frontend service (omnidrop-frontend) is managed directly in the
+  #    Render dashboard until environment group linking is resolved.
+  #    Add it back once omnidrop-frontend is in environmentId evm-d73q7vdm5p6s73eseue0.
   # ---------------------------------------------------------------------------
-  - type: web
-    name: omnidrop-frontend
-    runtime: node
-    region: oregon
-    plan: starter
-    branch: main
-    buildCommand: cd frontend && npm ci && npm run build
-    startCommand: cd frontend && npm run start
-    autoDeploy: true
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: NEXT_PUBLIC_APP_ENV
-        value: dev
-      - key: NEXT_PUBLIC_API_BASE_URL
-        value: https://api.omnidrop.dev
-      - key: NEXT_PUBLIC_WORKOS_REDIRECT_URI
-        value: https://app.omnidrop.dev/callback
-      # Secrets — set in Render dashboard → Environment Groups → omnidrop-secrets
-      - fromGroup: omnidrop-secrets
 
   # ---------------------------------------------------------------------------
   # 5. Flower (Celery monitoring) — OPTIONAL
