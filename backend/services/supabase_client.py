@@ -51,6 +51,26 @@ async def get_organization_by_workos_id(workos_org_id: str) -> dict | None:
     return result.data
 
 
+async def get_or_create_organization_by_user_id(workos_user_id: str) -> dict:
+    """
+    Find or create an org keyed on a WorkOS user ID.
+    Used when a user signs up without a WorkOS org (direct email login).
+    The synthetic workos_org_id is prefixed with 'user_' to distinguish it.
+    """
+    synthetic_id = f"user_{workos_user_id}"
+    existing = await get_organization_by_workos_id(synthetic_id)
+    if existing:
+        return existing
+
+    client = await get_supabase_client()
+    result = (
+        await client.table("organizations")
+        .insert({"workos_org_id": synthetic_id, "name": "My Organization"})
+        .execute()
+    )
+    return result.data[0]
+
+
 async def get_or_create_organization(workos_org_id: str, name: str) -> dict:
     """
     Return the organization for a WorkOS org ID, creating it if it doesn't exist.

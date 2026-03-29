@@ -26,8 +26,10 @@ export function SessionProvider({
   children: React.ReactNode;
 }) {
   useEffect(() => {
-    if (user?.workosOrgId) {
-      setAuthContext(user.workosOrgId, user.orgName ?? "");
+    if (user) {
+      // Always set auth context — backend accepts x-workos-user-id as fallback
+      // when the user doesn't yet have a WorkOS org (common for direct signups).
+      setAuthContext(user.workosOrgId, user.orgName ?? "", user.id);
     }
   }, [user]);
 

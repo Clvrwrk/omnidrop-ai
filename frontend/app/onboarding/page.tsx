@@ -529,7 +529,9 @@ function Step3({ onSuccess, onSkip, onBack }: Step3Props) {
           />
         </svg>
         {file ? (
-          <Text className="text-sm text-blue-700 font-medium">{file.name}</Text>
+          <Text className="text-sm text-blue-700 font-medium break-all px-20 text-center">
+            {file.name}
+          </Text>
         ) : (
           <>
             <Text className="text-sm text-gray-600">

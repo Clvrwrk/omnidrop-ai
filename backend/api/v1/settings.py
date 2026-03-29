@@ -101,9 +101,7 @@ async def upload_pricing_contract(
     Accepts a pricing contract file (PDF, Excel, CSV) and stores it for
     revenue leakage detection. Org is resolved from the x-workos-org-id header.
     """
-    workos_org_id = request.headers.get("x-workos-org-id")
-    if not workos_org_id:
-        raise HTTPException(status_code=401, detail="Missing organization context")
+    from backend.api.v1.organizations import _resolve_org
 
     allowed_types = {
         "application/pdf",
@@ -117,9 +115,7 @@ async def upload_pricing_contract(
             detail=f"Unsupported file type: {file.content_type}. Use PDF, Excel, or CSV.",
         )
 
-    from backend.services.supabase_client import get_or_create_organization
-
-    org = await get_or_create_organization(workos_org_id, "")
+    org = await _resolve_org(request)
     organization_id = org["organization_id"]
 
     # TODO: Store file in Supabase storage and insert row into pricing_contracts table

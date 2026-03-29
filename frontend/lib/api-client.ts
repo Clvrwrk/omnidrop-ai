@@ -32,11 +32,17 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
 
 // Module-level auth context — set once after login via setAuthContext()
 let _workosOrgId: string | null = null;
+let _workosUserId: string | null = null;
 let _workosOrgName: string | null = null;
 
-export function setAuthContext(workosOrgId: string, orgName: string) {
+export function setAuthContext(
+  workosOrgId: string | null,
+  orgName: string,
+  workosUserId?: string,
+) {
   _workosOrgId = workosOrgId;
   _workosOrgName = orgName;
+  if (workosUserId) _workosUserId = workosUserId;
 }
 
 class ApiError extends Error {
@@ -55,18 +61,19 @@ async function apiFetch<T>(
   options: RequestInit = {},
 ): Promise<T> {
   const authHeaders: Record<string, string> = {};
-  if (_workosOrgId) {
-    authHeaders["x-workos-org-id"] = _workosOrgId;
-    if (_workosOrgName) authHeaders["x-workos-org-name"] = _workosOrgName;
-  }
+  if (_workosOrgId) authHeaders["x-workos-org-id"] = _workosOrgId;
+  if (_workosUserId) authHeaders["x-workos-user-id"] = _workosUserId;
+  if (_workosOrgName) authHeaders["x-workos-org-name"] = _workosOrgName;
 
+  // Don't set Content-Type for FormData — browser sets it with the boundary.
+  const isFormData = options.body instanceof FormData;
   const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...authHeaders,
       ...options.headers,
     },
-    ...options,
   });
 
   if (!res.ok) {
@@ -255,11 +262,7 @@ export const api = {
     form.append("file", file);
     return apiFetch<UploadPricingContractResponse>(
       "/api/v1/settings/pricing-contracts",
-      {
-        method: "POST",
-        body: form,
-        headers: {}, // let browser set Content-Type with boundary
-      },
+      { method: "POST", body: form },
     );
   },
 };
