@@ -1,165 +1,219 @@
-# Coding Team Execution Plan
-# Omni-Intake AI Agent — Phase 2
+# OmniDrop AI — Beta V1.0 Execution Plan
 
-**Version:** 1.1
+**Version:** 2.0
 **Status:** Approved — Ready to Execute
-**Last Updated:** 2026-03-28
+**Date:** 2026-03-29
+**Supersedes:** Phase 2 plan (v1.1 — archived)
 
-**Agent team spawn prompt:** `docs/agent-team-spawn-prompt.md`
+**Design spec:** `docs/superpowers/specs/2026-03-29-beta-v1-triage-plan-design.md`
 **Architecture rules:** `CLAUDE.md`
-**Full tech spec:** `docs/technical-spec.md`
+**API contracts:** `docs/api-contracts.md`
+**Agent spawn prompt:** `docs/agent-team-spawn-prompt.md`
+
+---
+
+## Current State
+
+| Layer | Status |
+|---|---|
+| Celery pipeline (6 tasks) | ✅ Production-ready — do not touch |
+| Claude service methods | ✅ Production-ready — do not touch |
+| Unstructured.io service | ✅ Production-ready — do not touch |
+| Hookdeck HMAC + webhook endpoint | ✅ Production-ready — do not touch |
+| Database migrations (00001–00004) | ✅ Applied — do not touch |
+| WorkOS middleware + /callback | ✅ Production-ready — do not touch |
+| API client (lib/api-client.ts) | ✅ 25 typed methods — do not touch |
+| Backend API endpoints (18) | ⚠️ Stub → must implement |
+| Frontend pages (8) | ⚠️ Routing exists, zero UI design |
+| RLS policies | ❌ Missing entirely |
+| Supabase Storage bucket | ❌ Missing entirely |
+| Celery retry strategy | ❌ Missing on all 6 tasks |
+| Reference docs (12 services) | ❌ Missing entirely |
 
 ---
 
 ## Team Structure
 
-Phase 2 is executed by a 4-agent Claude Code team with strict file ownership
-boundaries to prevent race conditions. The team maps directly to the three
-implementation squads below plus the Lead Orchestrator.
-
-| Agent Team Role | Squad Equivalent | File Ownership |
+| Agent | Track | File Ownership |
 |---|---|---|
-| Lead Orchestrator | — | Coordination only, no file edits |
-| Teammate 1 — Frontend Engineer | Squad C | `/frontend/**` |
-| Teammate 2 — Backend Plumber | Squad A + B (infra/plumbing) | `/backend/api/**`, `/backend/workers/**`, `/backend/core/**`, `/shared/**`, `docker-compose.yml`, `render.yaml` |
-| Teammate 3 — AI & QA Engineer | Squad B (AI logic) + QA | `/backend/services/**`, `/tests/**` |
+| Lead Orchestrator | Pre-work + coordination + integration | No file edits — coordination only |
+| Teammate 1 — Frontend Engineer | Track 3: UI/UX | `/frontend/**` |
+| Teammate 2 — Backend Plumber | Track 2: API completion | `/backend/api/**`, `/backend/core/**`, `/shared/**` |
+| Teammate 3 — AI & QA Engineer | Track 1: References + RLS + retries + tests | `/backend/services/**`, `/tests/**`, `/docs/references/**`, `/backend/workers/**` |
 
 ---
 
-## Squad A — Infrastructure & Backend Plumbing
+## Lead Pre-Work
 
-**Agent:** Teammate 2 — Backend Plumber
-**Objective:** Data moves securely from Hookdeck → FastAPI → Celery → services. No blocking I/O anywhere in the request path.
+Complete all items below **before spawning any teammate**. These unblock all three tracks.
 
-| Task | Description | Deliverable | Status |
+| # | Task | File | Done |
 |---|---|---|---|
-| Repo scaffold | Monorepo with Next.js, FastAPI, Celery | Foundation | ✅ Complete |
-| `render.yaml` | Render.com Infrastructure as Code | 4 services defined | ✅ Complete |
-| Docker Compose | Local Redis + API + Worker | `docker-compose.yml` | ✅ Complete |
-| Supabase provisioning | Dev / sandbox / prod projects | 3 projects active | ✅ Complete |
-| Database migrations | `jobs`, `documents`, `invoices`, `line_items`, `document_embeddings`, `locations` tables | `supabase/migrations/` | 🔲 Phase 2 |
-| Hookdeck HMAC verification | `backend/core/security.py` — verify_hookdeck_signature() using HMAC-SHA256 | 401 on invalid sig | 🔲 Phase 2 |
-| Webhook endpoint | `POST /api/v1/webhooks/acculynx` — 4 steps only, 200 OK | Core intake route | 🔲 Phase 2 |
-| Celery task signatures | 4 tasks in `intake_tasks.py` with `rate_limit="10/s"` | Task scaffolding | 🔲 Phase 2 |
-| Shared Pydantic models | `shared/models/acculynx.py`, `shared/models/jobs.py`, `shared/constants.py` | Type-safe payloads | 🔲 Phase 2 |
-| Supabase async client | `backend/services/supabase_client.py` wired with service role key | DB connection | 🔲 Phase 2 |
-| REST API endpoints | FastAPI routes per `docs/api-contracts.md` | Frontend-ready API | 🔲 Phase 2 |
-| Sentry backend init | `sentry-sdk[fastapi]` with `SENTRY_PYTHON_DSN`, 429 capture | Error tracking | 🔲 Phase 2 |
-| Render env group | Create `omnidrop-secrets` in Render dashboard | Production secrets | 🔲 Phase 2 |
-| CI/CD pipeline | `.github/workflows/deploy-dev.yml` | Auto-deploy to dev | 🔲 Phase 2 |
+| L1 | Fix `VECTOR(1536)` → `VECTOR(1024)` in embedding schema | `docs/api-contracts.md` | ☐ |
+| L2 | Verify `00004_v3_pivot.sql` has: `bounced` job status, `notification_channels` on locations, `context_score`/`context_score_routing`/`clarification_question` on documents | Supabase SQL check | ☐ |
+| L3 | Add `system_config` table schema to api-contracts.md | `docs/api-contracts.md` | ☐ |
+| L4 | Create `docs/references/README.md` with index + standard template | `docs/references/README.md` | ☐ |
+| L5 | Spawn all three teammates with their track assignments | Agent spawn | ☐ |
 
-**Non-negotiable constraints:**
-- Webhook endpoint does ONLY the 4 allowed steps — see CLAUDE.md
-- AccuLynx API key is per-location — fetch from Supabase `locations` table at task runtime
-- Redis `maxmemoryPolicy: noeviction` — tasks must never be silently dropped
+**Spawn prompt for each teammate:** See `docs/agent-team-spawn-prompt.md`
 
 ---
 
-## Squad B — AI Engineering
+## Track 1 — AI & QA Engineer (Teammate 3)
 
-**Agent:** Teammate 3 — AI & QA Engineer (services portion)
-**Objective:** Implement the full Unstructured.io → Claude pipeline and own all test coverage.
+**Start after:** Lead Pre-Work complete
+**One task per agent session. Stop at 50% context.**
 
-| Task | Description | Deliverable | Status |
-|---|---|---|---|
-| UnstructuredService | `partition_document()` with strategy selection (hi_res/fast/auto) | Typed element output | 🔲 Phase 2 |
-| Claude Triage Agent | `classify_document()` — prompt for "structured" \| "unstructured" \| "unknown" | Document routing | 🔲 Phase 2 |
-| Structured extraction | `extract_invoice_schema()` — Claude extracts JSON, Pydantic validation | Invoice JSON to Supabase | 🔲 Phase 2 |
-| RAG chunking + embedding | `chunk_for_rag()` — semantic chunks → pgvector upsert | Semantic search enabled | 🔲 Phase 2 |
-| Text-to-SQL agent | `analytics_agent()` — CMD+K text → safe parameterized Postgres query | Analytics CMD+K | 🔲 Phase 3 |
-| HITL confidence scoring | Add confidence scores to extraction output → surface low-confidence fields | Accountant review queue | 🔲 Phase 3 |
-| Integration tests | `tests/test_webhook.py` — HMAC, Pydantic, Celery dispatch, 200 response | Webhook test coverage | 🔲 Phase 2 |
-| Unit tests | `tests/test_services.py` — all ClaudeService methods with fixture docs | Service test coverage | 🔲 Phase 2 |
-
-**AI model:** `claude-opus-4-6` for all Claude calls.
-
-**Unstructured.io strategy selection:**
-
-| Document Type | Strategy | Reason |
-|---|---|---|
-| Scanned invoice (image PDF) | `hi_res` | Requires OCR + layout analysis |
-| Digital proposal / text PDF | `fast` | Clean text, no OCR needed |
-| MSDS sheet | `hi_res` | Complex layout, safety tables |
-| Field manual (digital) | `fast` | Usually clean text |
-| Unknown type | `auto` | Unstructured picks best strategy |
-
-**QA mandate:** Teammate 3 is the active feedback loop for the full team. Protocol on violation detection:
-1. Write a failing test demonstrating the issue
-2. Message the offending teammate directly with test path + CLAUDE.md rule violated
-3. If unresolved within 2 tasks, escalate to Lead
-
----
-
-## Squad C — Frontend & UX
-
-**Agent:** Teammate 1 — Frontend Engineer
-**Objective:** Zero-cognitive-load UI. Every screen loads fast, guides the user to one action, and requires no training.
-
-| Task | UI Screen | Route | Description | Status |
+| # | Task | Deliverable | File(s) | Done |
 |---|---|---|---|---|
-| WorkOS auth integration | Screen 5 | `/callback`, `middleware.ts` | authkitMiddleware, handleAuth(), session cookie | 🔲 Phase 2 |
-| Sentry frontend init | — | — | `npx @sentry/wizard -i nextjs`, `NEXT_PUBLIC_SENTRY_DSN` | 🔲 Phase 2 |
-| API client | — | `lib/api-client.ts` | Typed fetch wrapper for all FastAPI calls | 🔲 Phase 2 |
-| Omni-Drop dashboard | Screens 2 & 15 | `/dashboard` | Drag-and-drop upload zone + Celery task status feed + Tremor charts | 🔲 Phase 2 |
-| Analytics CMD+K | Screens 3 & 9 | `/analytics` | C-Suite KPIs — Tremor Metric/BarList/AreaChart, natural language query bar | 🔲 Phase 2 |
-| Semantic search | — | `/search` | RAG query input → ranked document results with source excerpts | 🔲 Phase 2 |
-| HITL triage screen | Screens 4 & 7 | `/triage` | Split-screen PDF viewer + extracted fields with confidence scores | 🔲 Phase 2 |
-| Settings — locations | — | `/settings` | AccuLynx location key registration UI, connection status per location | 🔲 Phase 2 |
-| System health dashboard | Screens 10 & 14 | `/dashboard` (admin) | Webhook status, Celery queue depth, rate limit monitoring | 🔲 Phase 2 |
-
-**UI rules (non-negotiable):**
-- Tremor (`@tremor/react@^3`) for all charts and metrics — no Chart.js, no raw Recharts
-- Shadcn/UI for all primitive components (buttons, inputs, dialogs, tables)
-- Tailwind CSS v3 for layout and spacing
-- `SUPABASE_KEY` (anon) only in frontend — service role key never crosses to browser
-
-**Dependency:** Frontend data-fetching components depend on `docs/api-contracts.md` — Lead generates this in Phase 0 before frontend implements API calls.
+| T1-01 | Write migration `00005` — two parts: (1) `ALTER TABLE jobs ADD COLUMN clarification_question TEXT` (missing from 00004); (2) RLS policies for all 7 tables + V3 tables | `supabase/migrations/00005_rls_and_fixes.sql` | ☐ |
+| T1-02 | Add Celery retry strategy to all 6 tasks: `max_retries=3`, `retry_backoff=True`, `on_failure` handler | `backend/workers/intake_tasks.py` | ☐ |
+| T1-03 | Write `docs/references/supabase.md` — CLI, MCP tools, direct API, RLS patterns, Storage SOPs | `docs/references/supabase.md` | ☐ |
+| T1-04 | Write `docs/references/voyage-ai.md` — SDK setup, embedding call pattern, 1024-dim config | `docs/references/voyage-ai.md` | ☐ |
+| T1-05 | Write `docs/references/unstructured.md` — SDK, strategy selection, hi_res vs fast, API key SOP | `docs/references/unstructured.md` | ☐ |
+| T1-06 | Write `docs/references/hookdeck.md` — CLI, dashboard, HMAC setup, webhook SOP | `docs/references/hookdeck.md` | ☐ |
+| T1-07 | Write `docs/references/sentry.md` — init wizard, DSN variables, error capture patterns | `docs/references/sentry.md` | ☐ |
+| T1-08 | Write `docs/references/workos.md` — AuthKit setup, redirect URIs, role assignment SOP | `docs/references/workos.md` | ☐ |
+| T1-09 | Write `docs/references/render.md` — CLI, env group, deploy hooks, migration-before-restart pattern | `docs/references/render.md` | ☐ |
+| T1-10 | Write `docs/references/acculynx.md` — API auth, rate limits, per-location key pattern, webhook SOP | `docs/references/acculynx.md` | ☐ |
+| T1-11 | Write `docs/references/cronjob.md` — scheduling patterns for future maintenance tasks | `docs/references/cronjob.md` | ☐ |
+| T1-12 | Write `docs/references/servicetitan.md`, `jobnimbus.md`, `jobtread.md` — future integrations overview only | 3 files in `docs/references/` | ☐ |
+| T1-13 | Write integration tests: full pipeline webhook → process → score → extract | `tests/test_pipeline_integration.py` | ☐ |
+| T1-14 | Write unit tests: all ClaudeService methods, UnstructuredService, NotificationService | `tests/test_services.py` | ☐ |
 
 ---
 
-## Phase 0 — Lead Orchestrator Pre-Work
+## Track 2 — Backend Plumber (Teammate 2)
 
-Before spawning any teammate, the Lead completes:
+**Start after:** Lead Pre-Work complete (especially L1-L3 — api-contracts.md must be correct)
+**One endpoint group per agent session. Stop at 50% context.**
 
-| Task | Output | Why |
-|---|---|---|
-| Read and internalize `CLAUDE.md` | — | Establishes approval criteria |
-| Define all FastAPI endpoints | `docs/api-contracts.md` | Unblocks frontend data fetching |
-| Define TypeScript response interfaces | `docs/api-contracts.md` | Type safety across the boundary |
-| Define Supabase table schemas | `docs/api-contracts.md` | Unblocks both backend migrations and frontend reads |
-| Create initial task list (19 tasks) | Shared task list | Enables teammate self-claiming |
+All endpoints must: use `mcp__plugin_supabase_supabase__execute_sql` for schema inspection, return real Supabase data, include WorkOS auth extraction from session, and apply `organization_id` / `location_id` scoping.
+
+| # | Task | Endpoints | File | Done |
+|---|---|---|---|---|
+| T2-01 | Document upload — store bytes to Supabase Storage, create jobs row, dispatch `process_document.delay()`, freemium quota gate | `POST /api/v1/documents/upload` | `backend/api/v1/documents.py` | ☐ |
+| T2-02 | Jobs list + detail — query jobs by location/org with pagination | `GET /api/v1/jobs`, `GET /api/v1/jobs/{job_id}` | `backend/api/v1/jobs.py` | ☐ |
+| T2-03 | Events — list intake_events with pagination | `GET /api/v1/events` | `backend/api/v1/events.py` | ☐ |
+| T2-04 | Organizations — lazy-provision org from WorkOS session + list users | `GET /api/v1/organizations/me`, `GET /api/v1/organizations/me/users` | `backend/api/v1/organizations.py` | ☐ |
+| T2-05 | Location CRUD — list locations (api_key_last4 only), create location + store encrypted API key, update location | `GET /api/v1/settings/locations`, `POST /api/v1/settings/locations`, `PATCH /api/v1/settings/locations/{id}` | `backend/api/v1/settings.py` | ☐ |
+| T2-06 | Notification channels — save Slack webhook URL, send test message via SlackAdapter | `PATCH /api/v1/settings/locations/{id}/notifications`, `POST /api/v1/settings/locations/{id}/notifications/test` | `backend/api/v1/settings.py` | ☐ |
+| T2-07 | Pricing contracts — parse uploaded contract file (CSV/PDF), insert rows into `pricing_contracts` | `POST /api/v1/settings/pricing-contracts` | `backend/api/v1/settings.py` | ☐ |
+| T2-08 | Triage list + detail — list `triage_status='pending'` docs, return full extraction with confidence scores + signed Supabase Storage URL | `GET /api/v1/triage`, `GET /api/v1/triage/{document_id}` | `backend/api/v1/triage.py` | ☐ |
+| T2-09 | Triage corrections — save HITL edits, write corrected fields to `context_reference_examples` | `PATCH /api/v1/triage/{document_id}` | `backend/api/v1/triage.py` | ☐ |
+| T2-10 | Analytics KPIs — SQL aggregation: volume, accuracy rate, avg processing time, total invoice value | `GET /api/v1/analytics/kpis` | `backend/api/v1/analytics.py` | ☐ |
+| T2-11 | Analytics detail — vendor-spend grouped by vendor/job/month, leakage findings summary for C-Suite | `GET /api/v1/analytics/vendor-spend`, `GET /api/v1/analytics/leakage` | `backend/api/v1/analytics.py` | ☐ |
+| T2-12 | Search — pgvector semantic search via `chunk_and_embed` output | `GET /api/v1/search` | `backend/api/v1/search.py` | ☐ |
+
+---
+
+## Track 3 — Frontend Engineer (Teammate 1)
+
+**Start after:** Track 2 T2-01 through T2-04 complete (upload + jobs + orgs endpoints must be live for dashboard)
+**One page per agent session. Use `frontend-design` skill for every page. Stop at 50% context.**
+
+All pages must: use `lib/api-client.ts` exclusively (no raw `fetch()`), use Tremor for charts/metrics, Shadcn/UI for primitives, Tailwind v3 for layout.
+
+| # | Task | Route | Description | Done |
+|---|---|---|---|---|
+| T3-01 | Onboarding wizard — 5 steps: company → location → AccuLynx key → pricing contract upload → first findings | `/onboarding` | Multi-step form with progress indicator. Each step calls the relevant settings endpoint. | ☐ |
+| T3-02 | Main dashboard — drag-and-drop upload zone + real-time Celery job status feed | `/dashboard` | Dropzone component, job status cards with processing stages, freemium counter in layout | ☐ |
+| T3-03 | C-Suite revenue recovery — org-scoped leakage findings, vendor overcharge breakdown, Tremor charts | `/dashboard/c-suite` | Tremor BarList (vendor spend), AreaChart (leakage trend), KPI metrics row | ☐ |
+| T3-04 | Settings — location config, AccuLynx key input, Slack webhook URL + test button, pricing contract upload | `/settings` | Tabbed layout: Locations tab, Notifications tab, Pricing tab | ☐ |
+| T3-05 | Ops queue — HITL "Needs Clarity" document queue, medium-context docs awaiting accountant review | `/dashboard/ops` | Table with confidence score column, filter by location, sort by date | ☐ |
+| T3-06 | Job review — split-screen: PDF viewer (signed URL) + extracted fields with confidence indicators + correction form | `/dashboard/ops/jobs/[id]` | Two-panel layout. Slack deep link target. Per-field confidence badges. | ☐ |
+| T3-07 | Semantic search — CMD+K bar → ranked document results with source excerpts | `/search` | Command palette style. Results show document name, excerpt, confidence score. | ☐ |
+| T3-08 | Sentry frontend init + freemium counter in layout + final polish pass | `layout.tsx`, `middleware.ts` | `npx @sentry/wizard@latest -i nextjs`, usage counter component in nav | ☐ |
 
 ---
 
 ## Execution Sequence
 
 ```
-Phase 0 (Lead):    API contracts defined → docs/api-contracts.md
-                         │
-         ┌───────────────┼───────────────┐
-         ▼               ▼               ▼
-Squad A (Backend):  Squad B (AI/QA):  Squad C (Frontend):
-  HMAC verify         UnstructuredSvc   WorkOS auth
-  Webhook endpoint    Claude triage     Sentry init
-  Celery tasks        Extraction        API client
-  Shared models       RAG chunking      Dashboard UI
-  DB migrations       Integration tests Analytics UI
-  REST endpoints      Unit tests        Search + HITL
-         │               │               │
-         └───────────────┼───────────────┘
-                         ▼
-                  Lead: Final synthesis
-                  Lead: Clean up team
+Lead Pre-Work (L1–L4): schema fixes + api-contracts update + references template
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+Track 1 (T3):         Track 2 (T2):      Track 3 (T1):
+T1-01 RLS policies    T2-01 Upload       Waits for T2-01–T2-04
+T1-02 Celery retries  T2-02 Jobs         ──────────────────────
+T1-03 Supabase ref    T2-03 Events       T3-01 Onboarding
+T1-04 Voyage ref      T2-04 Orgs         T3-02 Dashboard
+T1-05 Unstructured    T2-05 Locations    T3-03 C-Suite
+T1-06 Hookdeck        T2-06 Notifs       T3-04 Settings
+T1-07 Sentry          T2-07 Pricing      T3-05 Ops queue
+T1-08 WorkOS          T2-08 Triage list  T3-06 Job review
+T1-09 Render          T2-09 Triage patch T3-07 Search
+T1-10 AccuLynx        T2-10 Analytics    T3-08 Sentry + polish
+T1-11 Cronjob         T2-11 Leakage
+T1-12 Future refs     T2-12 Search
+T1-13 Integration tests
+T1-14 Unit tests
+              │               │               │
+              └───────────────┼───────────────┘
+                              ▼
+                 Lead: Integration test
+                 Full pipeline: upload → process → score →
+                 extract → leakage → C-Suite dashboard ✅
+                 Bounce-back test: low-context → Slack ✅
+                 HITL test: medium-context → Ops queue → correction ✅
+                              ▼
+                         Beta V1.0 ✅
 ```
 
 ---
 
-## Definition of Done
+## Definition of Done — Beta V1.0
 
-A Phase 2 task is complete when:
-- [ ] Implementation is within the assigned file ownership boundary
-- [ ] At least one test exists covering the implemented logic
-- [ ] No CLAUDE.md rules are violated (QA engineer validates)
-- [ ] No synchronous AccuLynx calls outside a Celery task
-- [ ] No secrets hardcoded in any file
-- [ ] Lead has approved the plan before implementation began
+### Backend
+- [ ] All 18 API endpoints return real Supabase data
+- [ ] `POST /documents/upload` stores file to Supabase Storage + dispatches Celery
+- [ ] All 6 Celery tasks have `max_retries=3`, `retry_backoff=True`, `on_failure` handler
+- [ ] RLS policies written and applied on all 7 tables
+- [ ] Freemium quota gate active on upload + webhook endpoints
+
+### Frontend
+- [ ] All 8 pages designed and implemented using `frontend-design` skill
+- [ ] All pages use Tremor for charts, Shadcn/UI for primitives, Tailwind v3
+- [ ] No raw `fetch()` outside `lib/api-client.ts`
+- [ ] Freemium counter visible in layout (`documents_processed / max_documents`)
+
+### Reference Docs
+- [ ] 12 reference docs exist in `docs/references/`
+- [ ] Every doc has CLI, MCP, Direct API, and OmniDrop-Specific Patterns sections
+- [ ] Every doc has at least one Human SOP with the exact resume message format
+- [ ] `docs/references/README.md` indexes all docs
+
+### Integration
+- [ ] Full pipeline tested end-to-end on `app.omnidrop.dev`
+- [ ] Bounce-back: low-context doc → Slack message delivered
+- [ ] HITL: medium-context doc → Ops queue → accountant confirms → written to `context_reference_examples`
+
+### Deployment
+- [ ] App runs end-to-end on `app.omnidrop.dev`
+- [ ] `deploy-dev.yml` runs migrations before service restart
+- [ ] Sentry capturing errors in both backend and frontend
+
+---
+
+## Out of Scope for Beta V1.0
+
+- Stripe billing (freemium enforced, upgrade is manual)
+- Self-serve sign-up (sales-assisted)
+- ServiceTitan, JobNimbus, JobTread implementation (reference docs only)
+- Signal + AccuLynx notification adapters
+- Mobile app, SCIM, fine-tuning
+- Text-to-SQL analytics agent (Phase 3)
+- Vector-based Context Score enhancement (needs 500+ labeled examples)
+
+---
+
+## Agent Operating Rules (Summary)
+
+Every agent:
+1. Reads `CLAUDE.md` before starting any task
+2. Works on ONE deliverable per session
+3. Checks context at 50% — if hit, commits + writes handoff + stops
+4. Edits only files within their assigned ownership boundary
+5. Uses MCP tools over CLI over direct API (token efficiency)
+6. Never reads files outside what the current task requires
