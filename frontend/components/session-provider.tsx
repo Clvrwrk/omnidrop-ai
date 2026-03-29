@@ -25,10 +25,15 @@ export function SessionProvider({
   user: SessionUser | null;
   children: React.ReactNode;
 }) {
+  // Set auth context synchronously during render so module-level headers are
+  // populated before any child useEffect hooks fire (children's effects run
+  // before parents', so useEffect alone is too late for the first fetch).
+  if (user) {
+    setAuthContext(user.workosOrgId, user.orgName ?? "", user.id);
+  }
+
   useEffect(() => {
     if (user) {
-      // Always set auth context — backend accepts x-workos-user-id as fallback
-      // when the user doesn't yet have a WorkOS org (common for direct signups).
       setAuthContext(user.workosOrgId, user.orgName ?? "", user.id);
     }
   }, [user]);
