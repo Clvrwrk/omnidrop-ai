@@ -35,7 +35,7 @@ async def get_organization_by_id(organization_id: str) -> dict | None:
         .maybe_single()
         .execute()
     )
-    return result.data
+    return result.data if result else None
 
 
 async def get_organization_by_workos_id(workos_org_id: str) -> dict | None:
@@ -48,7 +48,7 @@ async def get_organization_by_workos_id(workos_org_id: str) -> dict | None:
         .maybe_single()
         .execute()
     )
-    return result.data
+    return result.data if result else None
 
 
 async def get_or_create_organization_by_user_id(workos_user_id: str) -> dict:
@@ -152,9 +152,9 @@ async def get_system_config(key: str) -> dict | None:
         await client.table("system_config")
         .select("value")
         .eq("key", key)
-        .single()
+        .maybe_single()
         .execute()
     )
-    if result.data:
+    if result and result.data:
         return result.data["value"]
     return None
