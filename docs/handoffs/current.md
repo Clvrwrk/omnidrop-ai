@@ -1,147 +1,131 @@
 # Project Handoff
 **Project:** OmniDrop AI — Beta V1.0
-**Date:** 2026-03-29 — End of Session
-**Agent:** Lead Orchestrator (brainstorming + planning session)
-**Reason:** 50% context hard-stop protocol
+**Date:** 2026-03-29 16:00
+**Agent:** Lead Orchestrator
+**Reason:** User-requested mid-session handoff (teammates still running)
 
 ---
 
 ## Accomplished This Session
 
-- **Repo cloned** to `/Users/chussey/Desktop/Claude Setup - Standard/Projects/OmniDropAI` from `github.com/Clvrwrk/omnidrop-ai`
-- **Full codebase audit** completed via Explore agent — see summary below
-- **Gap analysis** completed — 13 critical gaps identified across schema, task ownership, and ops
-- **Beta V1.0 design spec** written and committed: `docs/superpowers/specs/2026-03-29-beta-v1-triage-plan-design.md`
-- **Session handoff system** built and committed:
-  - `~/.claude/skills/project-handoff/SKILL.md` — the `/ProjectHandoff` skill
-  - `docs/references/session-handoff-system.md` — reference doc + Human SOPs
-  - `CLAUDE.md` — updated with 50% hard-stop protocol and token efficiency rules
-  - `docs/handoffs/` directory created with archive subdirectory
-- **Memory saved** to project memory system
+- `supabase/migrations/00005_rls_and_fixes.sql`: Migration 00005 applied to omnidrop-dev — `clarification_question TEXT` on jobs, `public.current_org_id()` helper function, 22 RLS policies across all 13 tables. Note: `auth` schema is off-limits on Supabase managed instances — function moved to `public` schema.
+- `supabase/migrations/00006_nullable_location_id_on_embeddings.sql`: Migration 00006 applied — made `document_embeddings.location_id` nullable so org-level uploads can route through chunk_and_embed.
+- `backend/workers/intake_tasks.py`: T1-02 — `retry_backoff=True`, standardised `max_retries=3`, shared `_on_task_failure` handler on all 7 tasks.
+- `backend/api/v1/documents.py`: T2-01 — upload endpoint with freemium gate, Storage upload, process_document.delay(), 202 response.
+- `backend/api/v1/jobs.py`: T2-02 — GET /jobs + GET /jobs/{job_id} with org-scoping.
+- `backend/api/v1/events.py`: T2-03 — GET /events with org-scoping + location filter.
+- `backend/api/v1/organizations.py`: T2-04 — GET /organizations/me + /me/users with WorkOS lazy-provision.
+- `backend/api/v1/settings.py`: T2-05 through T2-07 — GET+POST locations (key masking via `_mask_key()`), PATCH+DELETE locations, notifications PATCH+test, POST pricing-contracts (CSV+PDF parse).
+- `backend/api/v1/triage.py`: T2-08+T2-09 — GET triage list + single doc (signed URL + confidence scores), PATCH confirm/reject/correct with context_reference_example write.
+- `docs/references/supabase.md`: T1-03 — full 7-section reference, 3 SOPs.
+- `docs/references/voyage-ai.md`: T1-04 — full 7-section reference, 2 SOPs.
+- `docs/references/unstructured.md`: T1-05 — full 7-section reference, 2 SOPs.
+- `docs/references/hookdeck.md`: T1-06 — full 7-section reference, 3 SOPs. Fixed: env var is `HOOKDECK_SIGNING_SECRET` not `HOOKDECK_WEBHOOK_SECRET`.
+- `frontend/app/onboarding/page.tsx`: T3-01 — 5-step wizard, Precision Instrument design.
+- `frontend/app/dashboard/page.tsx`: T3-02 — Mission Control design, drag-drop upload zone, 5s-polling job feed with pipeline bar.
+- `frontend/app/dashboard/c-suite/page.tsx`: T3-03 — War Room design, countUp hero, Tremor AreaChart + BarList, location/vendor leakage tables.
 
 ## Git State
 - Branch: `main`
-- Last commit: `d897e70` — "Add session handoff system and 50% context window protocol"
-- Uncommitted changes: none
+- Last commit: `4ad7528` — "feat(T2-08+T2-09): implement GET /triage endpoints + PATCH HITL corrections"
+- Ahead of origin/main by 18 commits (not pushed)
+- Uncommitted changes: `docs/handoffs/current.md` (this file), `docs/handoffs/archive/2026-03-29-1428.md`, `supabase/migrations/00005_rls_and_fixes.sql` (untracked — migration was applied via MCP, file was written separately)
 
-## Task Cut Off
-None — session ended at a clean stopping point. All work committed.
+## Active Teammates (DO NOT STOP)
 
----
+Three agents are currently running in the background. A new Lead session must use SendMessage to resume them — do NOT re-spawn.
 
-## Next Task — Start Here
+| Agent name | Current task | Last commit |
+|---|---|---|
+| `teammate-1-frontend` | T3-04 /settings page | `d5d771d` |
+| `teammate-2-backend` | T2-10 GET /analytics/kpis | `4ad7528` |
+| `teammate-3-ai-qa` | T1-07 docs/references/sentry.md | `e79648a` |
 
-**Task:** Invoke the `writing-plans` skill to create the Beta V1.0 implementation plan
-**File:** `docs/superpowers/specs/2026-03-29-beta-v1-triage-plan-design.md` (the approved design spec — read this first)
-**Context:** The design has been fully approved across 3 sections. The writing-plans skill should turn it into a step-by-step execution plan with agent assignments. The plan should be scoped so each task fits within 40% of a context window.
-**Prompt to use:** "Read `docs/superpowers/specs/2026-03-29-beta-v1-triage-plan-design.md` then invoke the writing-plans skill to create the Beta V1.0 implementation plan."
+**To resume an agent:** Use `SendMessage` with `to: "teammate-1-frontend"` (or teammate-2/3) — they resume from their full transcript. Do NOT spawn new agents with the same names.
 
----
+## Remaining Tasks
 
-## Codebase Audit Summary (Critical Facts)
+### Track 1 — AI & QA (Teammate 3)
+- [ ] T1-07: docs/references/sentry.md ← IN PROGRESS
+- [ ] T1-08: docs/references/workos.md
+- [ ] T1-09: docs/references/render.md
+- [ ] T1-10: docs/references/acculynx.md
+- [ ] T1-11: docs/references/cronjob.md
+- [ ] T1-12: docs/references/servicetitan.md + jobnimbus.md + jobtread.md
+- [ ] T1-13: tests/test_pipeline_integration.py
+- [ ] T1-14: tests/test_services.py
 
-### What Is Production-Ready (Do Not Touch)
-- All 6 Celery tasks: `process_document`, `score_context`, `triage_document`, `extract_struct`, `chunk_and_embed`, `bounce_back`, `detect_revenue_leakage` — all real, all implemented
-- All Claude service methods in `backend/services/claude_service.py`
-- Unstructured.io service, Notification service (SlackAdapter), Hookdeck HMAC verification
-- Health check endpoint, Webhook endpoint (`POST /api/v1/webhooks/acculynx`)
-- All 4 database migrations including `00004_v3_pivot.sql` (pricing_contracts, revenue_findings, system_config, vendor_baseline_prices view all exist)
-- WorkOS middleware + `/callback` route
-- `lib/api-client.ts` (25 typed methods), `lib/types.ts`
-- CI/CD pipeline, `render.yaml`, `docker-compose.yml`
+### Track 2 — Backend (Teammate 2)
+- [ ] T2-10: GET /analytics/kpis ← IN PROGRESS
+- [ ] T2-11: GET /analytics/vendor-spend + GET /analytics/leakage
+- [ ] T2-12: GET /search (pgvector cosine similarity)
 
-### What Needs Completion (Stub → Real) — 18 Endpoints
-1. `POST /api/v1/documents/upload` — store bytes to Supabase Storage, create jobs row, dispatch Celery, freemium gate
-2. `GET /api/v1/jobs` — query by location/org, paginate
-3. `GET /api/v1/jobs/{job_id}` — single job detail
-4. `GET /api/v1/events` — list intake_events
-5. `GET /api/v1/organizations/me` — lazy-provision org from WorkOS session
-6. `GET /api/v1/organizations/me/users` — list org users
-7. `GET /api/v1/settings/locations` — list locations (api_key_last4 only)
-8. `POST /api/v1/settings/locations` — create location
-9. `PATCH /api/v1/settings/locations/{id}` — update location
-10. `PATCH /api/v1/settings/locations/{id}/notifications` — save Slack webhook URL
-11. `POST /api/v1/settings/locations/{id}/notifications/test` — send test Slack message
-12. `POST /api/v1/settings/pricing-contracts` — parse and insert pricing contract rows
-13. `GET /api/v1/triage` — list documents where triage_status='pending'
-14. `GET /api/v1/triage/{document_id}` — extraction with confidence scores + signed Storage URL
-15. `PATCH /api/v1/triage/{document_id}` — save HITL corrections
-16. `GET /api/v1/analytics/kpis` — SQL aggregation
-17. `GET /api/v1/analytics/vendor-spend` — grouped spend
-18. `GET /api/v1/analytics/leakage` — revenue findings summary
+### Track 3 — Frontend (Teammate 1)
+- [ ] T3-04: /settings ← IN PROGRESS
+- [ ] T3-05: /dashboard/ops — HITL Needs Clarity queue
+- [ ] T3-06: /dashboard/ops/jobs/[id] — split-screen review UI
+- [ ] T3-07: /search — CMD+K semantic search
+- [ ] T3-08: Sentry init + freemium counter + final polish
 
-### What Is Missing Entirely
-- RLS policies on all 7 Supabase tables (enabled but no policies written)
-- Supabase Storage bucket + raw file write in `documents.py`
-- Celery task retry strategy (max_retries, retry_backoff, on_failure) on all 6 tasks
-- 12 third-party reference docs in `docs/references/` (only session-handoff-system.md exists so far)
-- Full UI/UX design on ALL 8 frontend pages (routing/logic exists, zero visual design)
+## Next Task — Start Here (if resuming Lead)
 
-### Schema Issue to Verify Before Spawning Agents
-- `document_embeddings.embedding` — check `00004_v3_pivot.sql` — must be `VECTOR(1024)` not `VECTOR(1536)`. The api-contracts.md still shows `VECTOR(1536)` with wrong comment. Fix this before agents spawn.
+**Task:** Monitor and commit teammate output
+**Context:** All three teammates are active. The Lead's job is to:
+1. Receive task completion notifications
+2. Commit the files (teammates cannot run `git commit`)
+3. Send the teammate to their next task via `SendMessage`
+4. Review reference docs before committing (check for invented credentials)
+5. Handle any schema changes via `mcp__plugin_supabase_supabase__apply_migration`
 
----
+**Prompt to use:** "Read docs/handoffs/current.md. Three teammates are running — use SendMessage to check their status and continue committing their output as it arrives."
 
 ## Decisions Made This Session
 
-- **Option B (parallel tracks)** chosen for Beta V1.0 — 3 simultaneous workstreams, not sequential
-- **Agent teams approved** — same 4-agent structure as original execution plan
-- **50% hard-stop is non-negotiable** — written into CLAUDE.md, applies to all agents
-- **Token efficiency is invisible to agents** — they see no budget constraints, but plan is built for efficiency
-- **Reference docs format approved** — CLI + MCP + Direct API + Human SOP per service, 12 services total
-- **Supabase added** to the reference docs list (was missing from original plan)
-- **`docs/handoffs/current.md`** is always the active handoff, archive lives in `docs/handoffs/archive/`
-- **`/ProjectHandoff` skill** lives at `~/.claude/skills/project-handoff/SKILL.md` — global, not project-specific
-
----
+- **`auth` schema blocked on Supabase managed instances** — all custom functions must go in `public` schema. Use `public.current_org_id()` not `auth.organization_id()`.
+- **`document_embeddings.location_id` is now nullable** (migration 00006) — org-level uploads with no location_id can still produce embeddings.
+- **Pricing contracts are NOT pipeline documents** — POST /settings/pricing-contracts does a direct SQL insert with no Celery dispatch. No chunk_and_embed for contract files.
+- **Teammate 2 rolled T2-08 + T2-09 into one session** — both are committed at `4ad7528`. This is fine.
+- **Reference doc review protocol** — Lead must check all reference docs for invented credentials before committing. Only `[ASK USER]` placeholders are acceptable, not fabricated values.
+- **All git commits are done by Lead** — teammates cannot run Bash for git. Lead runs the commit command from each teammate's output.
 
 ## Blockers Requiring Human Action
 
-None currently. The next task (writing-plans) is fully unblocked.
+None currently.
 
-**Future blockers to anticipate:**
-- Supabase Storage bucket needs to be created manually (SOP will be in `docs/references/supabase.md` once written)
-- Render Environment Group `omnidrop-secrets` may need updating after schema changes
-- WorkOS redirect URIs confirmed working — no action needed
-
----
+**Anticipated future blockers:**
+- Render `omnidrop-secrets` Environment Group needs populating before first deploy to omnidrop-dev (T2 deployment task — not yet started)
+- `.github/workflows/deploy-dev.yml` CI/CD pipeline not yet set up
 
 ## Verification Commands
 
-Run these at the start of the next session to confirm state:
-1. `cd "/Users/chussey/Desktop/Claude Setup - Standard/Projects/OmniDropAI" && git log --oneline -5` — should show `d897e70` as most recent commit
-2. `ls docs/superpowers/specs/` — should show `2026-03-29-beta-v1-triage-plan-design.md`
-3. `ls ~/.claude/skills/project-handoff/` — should show `SKILL.md`
-
----
+1. `cd "/Users/chussey/Documents/Claude Projects/OmniDropAI" && git log --oneline -5` — should show `4ad7528` as most recent
+2. `ls docs/references/` — should show supabase.md, voyage-ai.md, unstructured.md, hookdeck.md (+ README.md, session-handoff-system.md)
+3. `ls frontend/app/dashboard/` — should show page.tsx, c-suite/page.tsx
 
 ## Full Context
 
-### Why This Project Exists
-OmniDrop AI is a revenue recovery platform for roofing companies. It ingests supplier invoices from AccuLynx (a roofing CRM) via webhooks, runs them through an AI pipeline (Unstructured.io for parsing, Claude for classification/extraction, Voyage AI for embeddings), and surfaces revenue leakage — cases where branches paid above contracted pricing. The flagship C-Suite view shows cross-branch overcharges by vendor and SKU.
+### Completed migrations on omnidrop-dev
+- 00001 through 00004: applied in prior sessions
+- 00005_rls_and_fixes: applied this session (22 RLS policies + clarification_question)
+- 00006_nullable_location_id_on_embeddings: applied this session
 
-### Infrastructure Status
-- **Render:** Running and stable (omnidrop-api, omnidrop-worker, omnidrop-redis services)
-- **WorkOS:** Running and stable (user registration works, auth tested)
-- **Supabase:** Stable (3 projects: dev/sandbox/prod, all migrations applied through 00004)
-- **GitHub:** `Clvrwrk/omnidrop-ai` — main branch, CI/CD wired to deploy-dev.yml
+### Lead orchestration pattern established this session
+Background agents hit permission walls for `git commit` and `apply_migration`. Protocol:
+- Teammate sends full file content or full SQL to Lead
+- Lead writes file with `Write` tool, applies migration with `apply_migration` MCP tool
+- Lead runs `git commit` via Bash
+- Lead sends teammate confirmation via `SendMessage` to proceed to next task
 
-### Key File Paths
-- Architecture rules: `CLAUDE.md`
-- Design spec: `docs/superpowers/specs/2026-03-29-beta-v1-triage-plan-design.md`
-- API contracts (source of truth for HTTP boundary): `docs/api-contracts.md`
-- Execution plan: `docs/execution-plan.md`
-- Agent spawn prompt: `docs/agent-team-spawn-prompt.md`
-- Reference docs (to be built): `docs/references/`
+### Design system established (frontend)
+All three pages use a shared vocabulary:
+- Font stack: Syne (headings) + DM Mono (numbers/data) + DM Sans (body)
+- Palette: `#0D0F0E` background, `#E8A020` amber accent, crimson for leakage/errors
+- Page names: "Precision Instrument" (onboarding), "Mission Control" (dashboard), "War Room" (c-suite)
+- Tremor used for charts; Shadcn/UI for primitives; custom `od-*` CSS classes for layout
 
-### What The User Knows
-- Non-technical on the implementation side — needs step-by-step Human SOPs for any manual action
-- Comfortable managing agent teams in Claude Code
-- Aware of the token efficiency strategy — agents should never be told about budget constraints
-- `/ProjectHandoff` is the only command needed to resume any session
-
-### Patterns Established This Session
-- Every third-party reference doc follows the structure in `docs/references/session-handoff-system.md` (overview → credentials → CLI → MCP → Direct API → OmniDrop patterns → Human SOP)
-- Human SOPs always end with the exact message to type to Claude to resume
-- Agent tasks are scoped to one deliverable each, targeting completion within 40% context window
-- The writing-plans skill is always the next step after brainstorming completes
+### Key invariants to enforce in remaining tasks
+- `acculynx_api_key` never in any API response — `api_key_last4` only
+- `organization_id` always from WorkOS session headers, never from request body
+- Freemium gate on all upload paths
+- No raw `fetch()` in frontend — all through `lib/api-client.ts`
+- Reference docs: `[ASK USER]` for all credential values, never invented
