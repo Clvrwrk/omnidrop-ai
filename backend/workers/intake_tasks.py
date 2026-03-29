@@ -23,18 +23,57 @@ RATE LIMIT RULES:
 import logging
 from typing import Any
 
+import sentry_sdk
+
 from backend.workers.celery_app import celery_app
 from shared.constants import ACCULYNX_RATE_LIMIT
 
 logger = logging.getLogger(__name__)
 
 
+# ── Shared on_failure handler ─────────────────────────────────────────────────
+
+
+def _on_task_failure(self: Any, exc: Exception, task_id: str, args: tuple, kwargs: dict, einfo: Any) -> None:
+    """
+    Fires after all retries are exhausted on any intake task.
+
+    - Logs the failure with full context to Sentry.
+    - Updates the job status to 'failed' in Supabase so the UI reflects the error.
+    - job_id is always the first positional arg OR present in the first dict arg.
+    """
+    # Resolve job_id from args — all tasks receive a dict payload as their first arg
+    job_id: str = "unknown"
+    if args:
+        first_arg = args[0]
+        if isinstance(first_arg, dict):
+            job_id = first_arg.get("job_id", "unknown")
+
+    logger.error(
+        "Celery task exhausted all retries",
+        extra={"task": self.name, "task_id": task_id, "job_id": job_id, "error": str(exc)},
+    )
+
+    sentry_sdk.capture_exception(
+        exc,
+        extras={"task": self.name, "task_id": task_id, "job_id": job_id},
+    )
+
+    if job_id != "unknown":
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(
+            _update_job_status(job_id, "failed", error_message=f"{self.name} failed after retries: {exc}")
+        )
+
+
 @celery_app.task(
     name="intake.process_document",
     bind=True,
     max_retries=3,
+    retry_backoff=True,
     default_retry_delay=30,
     rate_limit=ACCULYNX_RATE_LIMIT,
+    on_failure=_on_task_failure,
 )
 def process_document(self: Any, job_payload: dict[str, Any]) -> dict[str, Any]:
     """
@@ -190,7 +229,9 @@ def process_document(self: Any, job_payload: dict[str, Any]) -> dict[str, Any]:
     name="intake.triage_document",
     bind=True,
     max_retries=3,
+    retry_backoff=True,
     default_retry_delay=15,
+    on_failure=_on_task_failure,
 )
 def triage_document(self: Any, parsed_result: dict[str, Any]) -> dict[str, Any]:
     """
@@ -207,8 +248,6 @@ def triage_document(self: Any, parsed_result: dict[str, Any]) -> dict[str, Any]:
     Returns:
         TriagedDocumentResult-shaped dict.
     """
-    import sentry_sdk
-
     from backend.services.claude_service import ClaudeService
 
     job_id = parsed_result.get("job_id", "unknown")
@@ -265,7 +304,9 @@ def triage_document(self: Any, parsed_result: dict[str, Any]) -> dict[str, Any]:
     name="intake.extract_struct",
     bind=True,
     max_retries=3,
+    retry_backoff=True,
     default_retry_delay=15,
+    on_failure=_on_task_failure,
 )
 def extract_struct(self: Any, triaged_result: dict[str, Any]) -> dict[str, Any]:
     """
@@ -340,7 +381,9 @@ def extract_struct(self: Any, triaged_result: dict[str, Any]) -> dict[str, Any]:
     name="intake.chunk_and_embed",
     bind=True,
     max_retries=3,
+    retry_backoff=True,
     default_retry_delay=15,
+    on_failure=_on_task_failure,
 )
 def chunk_and_embed(self: Any, triaged_result: dict[str, Any]) -> dict[str, Any]:
     """
@@ -392,7 +435,9 @@ def chunk_and_embed(self: Any, triaged_result: dict[str, Any]) -> dict[str, Any]
     name="intake.score_context",
     bind=True,
     max_retries=3,
+    retry_backoff=True,
     default_retry_delay=15,
+    on_failure=_on_task_failure,
 )
 def score_context(self: Any, processed_result: dict[str, Any]) -> dict[str, Any]:
     """
@@ -475,8 +520,10 @@ def score_context(self: Any, processed_result: dict[str, Any]) -> dict[str, Any]
 @celery_app.task(
     name="intake.bounce_back",
     bind=True,
-    max_retries=2,
+    max_retries=3,
+    retry_backoff=True,
     default_retry_delay=30,
+    on_failure=_on_task_failure,
 )
 def bounce_back(self: Any, scored_result: dict[str, Any]) -> dict[str, Any]:
     """
@@ -570,7 +617,9 @@ def bounce_back(self: Any, scored_result: dict[str, Any]) -> dict[str, Any]:
     name="intake.detect_revenue_leakage",
     bind=True,
     max_retries=3,
+    retry_backoff=True,
     default_retry_delay=15,
+    on_failure=_on_task_failure,
 )
 def detect_revenue_leakage(self: Any, extraction_result: dict[str, Any]) -> dict[str, Any]:
     """
