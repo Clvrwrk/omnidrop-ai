@@ -617,16 +617,459 @@ async def test_notification(
     }
 
 
-# ── T2-07 stub (implemented next session) ─────────────────────────────────────
+# ── T2-07: POST /api/v1/settings/pricing-contracts ────────────────────────────
+
+# Maximum pricing contract file size: 10 MB
+_CONTRACT_MAX_BYTES = 10 * 1024 * 1024
+
+# CSV column name aliases — case-insensitive, accept common variations
+_VENDOR_ALIASES    = {"vendor_name", "vendor", "supplier", "manufacturer"}
+_DESC_ALIASES      = {"description", "material_description", "item", "material",
+                      "product", "product_name", "line_item", "item_description"}
+_PRICE_ALIASES     = {"unit_price", "contracted_unit_price", "price", "cost",
+                      "rate", "contracted_price", "contract_price"}
+_SKU_ALIASES       = {"sku", "unit", "uom", "unit_of_measure", "part_number",
+                      "part_no", "item_no", "item_number", "product_code", "code"}
+_EFF_DATE_ALIASES  = {"effective_date", "eff_date", "start_date", "date",
+                      "contract_date", "valid_from"}
+_EXP_DATE_ALIASES  = {"expiry_date", "expiration_date", "exp_date", "end_date",
+                      "valid_to", "valid_until"}
+
+
+def _normalise_header(h: str) -> str:
+    """Lowercase, strip whitespace, collapse internal spaces/hyphens to underscore."""
+    import re
+    return re.sub(r"[\s\-]+", "_", h.strip().lower())
+
+
+def _match_col(headers_norm: list[str], aliases: set[str]) -> str | None:
+    """Return the first normalised header that appears in the alias set, or None."""
+    for h in headers_norm:
+        if h in aliases:
+            return h
+    return None
+
+
+def _parse_price(raw: str) -> float | None:
+    """Parse a price string like '$12.50', '12,500.00', or '12.50'. Returns None on failure."""
+    import re
+    cleaned = re.sub(r"[^\d.]", "", raw.strip())
+    try:
+        return float(cleaned) if cleaned else None
+    except ValueError:
+        return None
+
+
+def _parse_date(raw: str) -> str | None:
+    """
+    Try to parse a date string into ISO 8601 (YYYY-MM-DD).
+    Accepts: YYYY-MM-DD, MM/DD/YYYY, M/D/YY, YYYY/MM/DD.
+    Returns None if unparseable.
+    """
+    from datetime import datetime
+    raw = raw.strip()
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%d-%b-%Y", "%b %d %Y"):
+        try:
+            return datetime.strptime(raw, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def _extract_date_from_filename(filename: str) -> str | None:
+    """
+    Try to pull an ISO date from a filename like 'acme-pricing-2026-01-01.csv'.
+    Returns first YYYY-MM-DD match or None.
+    """
+    import re
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", filename)
+    return m.group(1) if m else None
+
+
+def _parse_csv(
+    raw_bytes: bytes,
+    organization_id: str,
+    filename: str,
+) -> tuple[list[dict], list[str], str | None]:
+    """
+    Parse a CSV pricing contract into pricing_contracts row dicts.
+
+    Returns:
+        (rows, vendors_found, effective_date)
+        rows: list of dicts ready to INSERT into pricing_contracts
+        vendors_found: deduplicated list of vendor names
+        effective_date: ISO date string or None
+    """
+    import csv
+    import io
+
+    # Attempt UTF-8 first, fall back to latin-1 for files with funky encodings
+    try:
+        text = raw_bytes.decode("utf-8-sig")   # utf-8-sig strips the BOM if present
+    except UnicodeDecodeError:
+        text = raw_bytes.decode("latin-1")
+
+    reader = csv.DictReader(io.StringIO(text))
+    if reader.fieldnames is None:
+        raise ValueError("CSV file has no header row.")
+
+    # Build a normalised→original header map
+    original_headers = list(reader.fieldnames)
+    norm_headers = [_normalise_header(h) for h in original_headers]
+    norm_to_orig = dict(zip(norm_headers, original_headers))
+
+    # Map normalised header names to column roles
+    vendor_col = _match_col(norm_headers, _VENDOR_ALIASES)
+    desc_col   = _match_col(norm_headers, _DESC_ALIASES)
+    price_col  = _match_col(norm_headers, _PRICE_ALIASES)
+    sku_col    = _match_col(norm_headers, _SKU_ALIASES)
+    eff_col    = _match_col(norm_headers, _EFF_DATE_ALIASES)
+    exp_col    = _match_col(norm_headers, _EXP_DATE_ALIASES)
+
+    if not vendor_col:
+        raise ValueError(
+            f"CSV is missing a vendor_name column. "
+            f"Recognised aliases: {sorted(_VENDOR_ALIASES)}. "
+            f"Found headers: {original_headers}."
+        )
+    if not price_col:
+        raise ValueError(
+            f"CSV is missing a unit_price column. "
+            f"Recognised aliases: {sorted(_PRICE_ALIASES)}. "
+            f"Found headers: {original_headers}."
+        )
+
+    rows: list[dict] = []
+    vendors: set[str] = set()
+    file_effective_date: str | None = _extract_date_from_filename(filename)
+    first_date_found: str | None = None
+
+    for line_num, row in enumerate(reader, start=2):  # start=2 because row 1 is header
+        # Use original headers to access values, then normalise for role lookup
+        def _get(norm_col: str | None) -> str:
+            if norm_col is None:
+                return ""
+            orig = norm_to_orig.get(norm_col, "")
+            return (row.get(orig) or "").strip()
+
+        vendor_name = _get(vendor_col)
+        if not vendor_name:
+            continue   # Skip blank/headerless rows silently
+
+        raw_price = _get(price_col)
+        unit_price = _parse_price(raw_price)
+        if unit_price is None:
+            logger.warning(
+                "upload_pricing_contract: skipping row with unparseable price",
+                extra={"line": line_num, "raw_price": raw_price, "vendor": vendor_name},
+            )
+            continue
+
+        description = _get(desc_col) or None
+        sku         = _get(sku_col) or None
+
+        # Parse effective/expiry dates from columns if present
+        raw_eff = _get(eff_col)
+        raw_exp = _get(exp_col)
+        effective_date = _parse_date(raw_eff) if raw_eff else None
+        expiry_date    = _parse_date(raw_exp) if raw_exp else None
+
+        # Track first date found in data for fallback
+        if first_date_found is None and effective_date:
+            first_date_found = effective_date
+
+        vendors.add(vendor_name)
+        rows.append({
+            "organization_id":      organization_id,
+            "vendor_name":          vendor_name,
+            "description":          description,
+            "sku":                  sku,
+            "contracted_unit_price": unit_price,
+            "effective_date":       effective_date,
+            "expiry_date":          expiry_date,
+        })
+
+    # Resolve final effective_date: column data → filename → None
+    resolved_effective_date = first_date_found or file_effective_date
+
+    return rows, sorted(vendors), resolved_effective_date
+
+
+def _parse_pdf(
+    raw_bytes: bytes,
+    organization_id: str,
+    filename: str,
+) -> tuple[list[dict], list[str], str | None]:
+    """
+    Parse a PDF pricing contract via Unstructured.io.
+
+    Strategy: use 'fast' — pricing contracts are clean digital PDFs, not
+    scanned invoices. Extract table elements first; fall back to heuristic
+    line parsing on all text if table extraction yields zero rows.
+
+    Returns:
+        (rows, vendors_found, effective_date)
+    """
+    import re
+    from backend.services.unstructured_service import UnstructuredService
+
+    elements = UnstructuredService.partition_document(
+        file_bytes=raw_bytes,
+        filename=filename,
+        document_type_hint="proposal",   # "proposal" → fast strategy
+    )
+
+    # ── Step 1: Extract all text lines from Table elements ────────────────────
+    table_lines: list[str] = []
+    all_lines:   list[str] = []
+    file_effective_date = _extract_date_from_filename(filename)
+
+    for el in elements:
+        text = el.get("text", "").strip()
+        if not text:
+            continue
+        all_lines.append(text)
+        if el.get("type") == "Table":
+            table_lines.extend(text.splitlines())
+
+    # ── Step 2: Attempt row extraction from table text ────────────────────────
+    rows, vendors, eff_date = _extract_rows_from_lines(
+        table_lines if table_lines else all_lines,
+        organization_id,
+    )
+
+    # If table parsing got nothing, try the full text
+    if not rows and table_lines:
+        rows, vendors, eff_date = _extract_rows_from_lines(all_lines, organization_id)
+
+    # Try to find an effective date in the full text if not yet found
+    if eff_date is None and file_effective_date is None:
+        for line in all_lines[:30]:   # Only scan the first 30 lines (header area)
+            m = re.search(r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4})", line)
+            if m:
+                eff_date = _parse_date(m.group(1))
+                if eff_date:
+                    break
+
+    return rows, vendors, eff_date or file_effective_date
+
+
+def _extract_rows_from_lines(
+    lines: list[str],
+    organization_id: str,
+) -> tuple[list[dict], list[str], str | None]:
+    """
+    Heuristic extraction: scan text lines for pricing rows.
+
+    Looks for lines that contain a price pattern (currency/numeric value).
+    Splits each line into: [vendor?] [description] [sku?] [price] [unit?]
+
+    This is best-effort — structured CSV is strongly preferred for accuracy.
+    """
+    import re
+
+    # Pattern: a standalone decimal number, optionally preceded by $ or currency
+    price_re = re.compile(r"\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,4})?)\s*$")
+
+    rows: list[dict] = []
+    vendors: set[str] = set()
+    first_date: str | None = None
+
+    # Try to detect a header line to skip it
+    header_keywords = {"vendor", "description", "price", "unit", "sku", "item", "cost", "rate"}
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Skip lines that look like headers
+        low = line.lower()
+        if sum(1 for kw in header_keywords if kw in low) >= 3:
+            continue
+
+        # Each line expected to be tab or pipe or multiple-space delimited
+        parts = re.split(r"\t|\s{2,}|\|", line)
+        parts = [p.strip() for p in parts if p.strip()]
+
+        if len(parts) < 2:
+            continue
+
+        # The last part that looks like a price is our unit_price
+        price_val: float | None = None
+        price_idx: int = -1
+        for i in range(len(parts) - 1, -1, -1):
+            m = price_re.search(parts[i])
+            if m:
+                price_val = _parse_price(parts[i])
+                price_idx = i
+                break
+
+        if price_val is None or price_val <= 0:
+            continue
+
+        remaining = [p for j, p in enumerate(parts) if j != price_idx]
+
+        # First remaining part is vendor_name; second (if exists) is description
+        vendor_name = remaining[0] if remaining else None
+        description = remaining[1] if len(remaining) > 1 else None
+        sku         = remaining[2] if len(remaining) > 2 else None
+
+        if not vendor_name:
+            continue
+
+        vendors.add(vendor_name)
+        rows.append({
+            "organization_id":       organization_id,
+            "vendor_name":           vendor_name,
+            "description":           description,
+            "sku":                   sku,
+            "contracted_unit_price": price_val,
+            "effective_date":        None,
+            "expiry_date":           None,
+        })
+
+    return rows, sorted(vendors), first_date
+
 
 @router.post(
     "/settings/pricing-contracts",
     status_code=201,
-    summary="Upload a pricing contract file  [T2-07]",
+    summary="Upload a pricing contract (CSV or PDF) — inserts rows into pricing_contracts",
 )
 async def upload_pricing_contract(
     request: Request,
     file: UploadFile = File(...),
+    organization_id: str = Form(...),
 ) -> dict:
-    """Stub — implemented in T2-07."""
-    raise HTTPException(status_code=501, detail="Not yet implemented. Coming in T2-07.")
+    """
+    Accepts a CSV or PDF pricing contract, parses it into structured rows,
+    and bulk-inserts them into the pricing_contracts table scoped to the org.
+
+    CSV is strongly preferred — column headers are flexible (vendor_name/vendor/
+    supplier, unit_price/price/cost, description/material_description, sku/unit).
+
+    PDF is parsed via Unstructured.io (fast strategy) — table elements are
+    extracted first, with a full-text heuristic fallback. Best-effort: structured
+    CSV is more reliable for complex layouts.
+
+    No Celery dispatch — pricing contracts are reference data, not pipeline docs.
+    Parse and insert happen synchronously in this request.
+
+    Auth: organization_id in form body is validated against the WorkOS session.
+    """
+    org = await _resolve_org(request)
+    session_org_id = str(org["organization_id"])
+
+    # Guard: form org must match session org
+    if organization_id != session_org_id:
+        raise HTTPException(
+            status_code=403,
+            detail="organization_id does not match the authenticated session.",
+        )
+
+    # ── 1. Validate file type ──────────────────────────────────────────────────
+    content_type = (file.content_type or "").split(";")[0].strip().lower()
+    filename = file.filename or "contract"
+
+    # Accept by content-type, but also accept .csv files sent as octet-stream
+    is_csv = (
+        content_type in {"text/csv", "text/plain", "application/csv"}
+        or filename.lower().endswith(".csv")
+    )
+    is_pdf = (
+        content_type == "application/pdf"
+        or filename.lower().endswith(".pdf")
+    )
+
+    if not is_csv and not is_pdf:
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"Unsupported file type '{content_type}'. "
+                "Only CSV and PDF pricing contracts are accepted."
+            ),
+        )
+
+    # ── 2. Read bytes + size guard ─────────────────────────────────────────────
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(file_bytes) > _CONTRACT_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="File exceeds the 10 MB maximum for pricing contracts.",
+        )
+
+    # ── 3. Parse into rows ─────────────────────────────────────────────────────
+    try:
+        if is_csv:
+            rows, vendors_found, effective_date = _parse_csv(
+                file_bytes, session_org_id, filename
+            )
+        else:
+            rows, vendors_found, effective_date = _parse_pdf(
+                file_bytes, session_org_id, filename
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(
+            "upload_pricing_contract: parse failed",
+            extra={"filename": filename, "org": session_org_id, "error": str(exc)},
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to parse the contract file: {exc}",
+        )
+
+    if not rows:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No valid pricing rows could be extracted from the file. "
+                "Check that the file has vendor_name and unit_price columns (CSV), "
+                "or contains a structured pricing table (PDF)."
+            ),
+        )
+
+    # ── 4. Bulk insert into pricing_contracts ─────────────────────────────────
+    client = await get_supabase_client()
+    try:
+        result = await client.table("pricing_contracts").insert(rows).execute()
+    except Exception as exc:
+        logger.error(
+            "upload_pricing_contract: insert failed",
+            extra={
+                "org": session_org_id,
+                "row_count": len(rows),
+                "error": str(exc),
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Rows parsed successfully but database insert failed. Please retry.",
+        )
+
+    rows_inserted = len(result.data) if result.data else len(rows)
+
+    logger.info(
+        "upload_pricing_contract: complete",
+        extra={
+            "organization_id": session_org_id,
+            "filename": filename,
+            "rows_inserted": rows_inserted,
+            "vendors_found": vendors_found,
+            "effective_date": effective_date,
+        },
+    )
+
+    # ── 5. Return 201 ─────────────────────────────────────────────────────────
+    return {
+        "organization_id": session_org_id,
+        "rows_inserted": rows_inserted,
+        "vendors_found": vendors_found,
+        "effective_date": effective_date,
+    }
