@@ -5,6 +5,41 @@ Full architecture detail is in `ARCHITECTURE_SPEC.md`.
 
 ---
 
+## Context Window Protocol — 50% Rule (Non-Negotiable)
+
+Every agent checks context usage after completing each discrete unit of work (one endpoint, one page, one migration, one reference doc).
+
+**At 50% context used — execute this immediately:**
+
+1. Finish the current function, migration, or component. Never stop mid-block.
+2. Commit all changes: `git add [specific files] && git commit -m "[message]"`
+3. Write `docs/handoffs/current.md` using the template in `docs/references/session-handoff-system.md`
+4. Copy to `docs/handoffs/archive/YYYY-MM-DD-HHMM.md`
+5. Send this message to Lead (or user if no Lead):
+
+```
+🟡 CONTEXT 50% — [Agent Name] — Handoff generated
+
+Handoff: docs/handoffs/current.md
+Last commit: [short hash] — [message]
+Next task: [exact task name]
+
+To resume: /ProjectHandoff
+```
+
+6. **STOP. Do not start the next task.**
+
+**The 50% alert is a hard stop — not a suggestion.**
+Do not rationalize continuing because "this task is almost done." Almost done at 80% context means broken code at 100%.
+
+**Token efficiency rules (built into every task):**
+- Prefer MCP tools over raw API calls when an MCP server is available
+- Read only files needed for the current task — no exploratory browsing
+- Use `mcp__plugin_supabase_supabase__execute_sql` for schema inspection, not the Python SDK
+- Each agent session targets ONE deliverable: one endpoint, one page, one migration
+
+---
+
 ## What We're Building
 
 AI-powered **revenue recovery and financial interrogation platform** for roofing accounting teams.
