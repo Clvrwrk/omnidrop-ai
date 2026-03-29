@@ -2,8 +2,12 @@
 OmniDrop AI — FastAPI Application Entrypoint
 """
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+logger = logging.getLogger(__name__)
 
 from backend.api.v1 import (
     analytics,
@@ -34,9 +38,12 @@ app = FastAPI(
     redoc_url="/redoc" if _settings.app_env != "production" else None,
 )
 
+_cors = _settings.cors_origins
+logger.info("CORS origins: %s (APP_ENV=%s)", _cors, _settings.app_env)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_settings.cors_origins,
+    allow_origins=_cors,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

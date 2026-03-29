@@ -58,11 +58,22 @@ class Settings(BaseSettings):
         default=1.0, validation_alias="SENTRY_TRACES_SAMPLE_RATE"
     )
 
+    # CORS — optional override (comma-separated). When set, replaces the
+    # env-based defaults below. Useful when APP_ENV can't be trusted.
+    cors_origins_override: str | None = Field(
+        default=None, validation_alias="CORS_ORIGINS"
+    )
+
     @property
     def cors_origins(self) -> list[str]:
+        if self.cors_origins_override:
+            return [o.strip() for o in self.cors_origins_override.split(",") if o.strip()]
         origins = {
             "local": ["http://localhost:3000"],
-            "dev": ["https://app.omnidrop.dev"],
+            "dev": [
+                "https://app.omnidrop.dev",
+                "https://omnidrop-frontend.onrender.com",
+            ],
             "sandbox": ["https://sandbox.omnidrop.dev"],
             "production": ["https://app.omnidrop.ai"],
         }
