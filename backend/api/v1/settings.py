@@ -11,7 +11,7 @@ SECURITY: acculynx_api_key is NEVER returned in full — only last 4 chars.
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -86,3 +86,48 @@ async def delete_location(location_id: str) -> Response:
     """Deletes location. Fails 409 if unprocessed jobs exist. Placeholder."""
     # TODO: Check for unprocessed jobs, delete from Supabase
     return Response(status_code=204)
+
+
+@router.post(
+    "/settings/pricing-contracts",
+    status_code=201,
+    summary="Upload a national pricing contract",
+)
+async def upload_pricing_contract(
+    request: Request,
+    file: UploadFile = File(...),
+) -> dict:
+    """
+    Accepts a pricing contract file (PDF, Excel, CSV) and stores it for
+    revenue leakage detection. Org is resolved from the x-workos-org-id header.
+    """
+    workos_org_id = request.headers.get("x-workos-org-id")
+    if not workos_org_id:
+        raise HTTPException(status_code=401, detail="Missing organization context")
+
+    allowed_types = {
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+        "text/csv",
+    }
+    if file.content_type and file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported file type: {file.content_type}. Use PDF, Excel, or CSV.",
+        )
+
+    from backend.services.supabase_client import get_or_create_organization
+
+    org = await get_or_create_organization(workos_org_id, "")
+    organization_id = org["organization_id"]
+
+    # TODO: Store file in Supabase storage and insert row into pricing_contracts table
+    contract_id = str(uuid4())
+    return {
+        "contract_id": contract_id,
+        "organization_id": organization_id,
+        "filename": file.filename,
+        "status": "queued",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }

@@ -249,10 +249,10 @@ export const api = {
     ),
 
   // Pricing contracts — POST /api/v1/settings/pricing-contracts (multipart)
-  uploadPricingContract: (file: File, organizationId: string) => {
+  // Org is resolved server-side from the x-workos-org-id header.
+  uploadPricingContract: (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    form.append("organization_id", organizationId);
     return apiFetch<UploadPricingContractResponse>(
       "/api/v1/settings/pricing-contracts",
       {

@@ -425,13 +425,12 @@ function Step2({ org, onSuccess, onSkip, onBack }: Step2Props) {
 // ─── Step 3 — Unlock Revenue Detection ───────────────────────────────────────
 
 interface Step3Props {
-  org: Organization | null;
   onSuccess: (mode: "contract") => void;
   onSkip: () => void;
   onBack: () => void;
 }
 
-function Step3({ org, onSuccess, onSkip, onBack }: Step3Props) {
+function Step3({ onSuccess, onSkip, onBack }: Step3Props) {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -457,11 +456,11 @@ function Step3({ org, onSuccess, onSkip, onBack }: Step3Props) {
   }
 
   async function handleUpload() {
-    if (!file || !org) return;
+    if (!file) return;
     setUploading(true);
     setError(null);
     try {
-      await api.uploadPricingContract(file, org.organization_id);
+      await api.uploadPricingContract(file);
       onSuccess("contract");
     } catch (e) {
       setError(
@@ -937,7 +936,6 @@ export default function OnboardingPage() {
           )}
           {step === 3 && (
             <Step3
-              org={org}
               onSuccess={(mode) => {
                 setPricingMode(mode);
                 setStep(4);
