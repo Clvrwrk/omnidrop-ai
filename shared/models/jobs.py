@@ -46,7 +46,9 @@ class CeleryJobPayload(BaseModel):
 
     job_id: str = Field(..., description="AccuLynx job ID")
     organization_id: str = Field(..., description="Organization ID — new tenant root")
-    location_id: str | None = Field(default=None, description="Location ID — used to fetch API key from Supabase")
+    location_id: str | None = Field(
+        default=None, description="Location ID — used to fetch API key from Supabase"
+    )
     event_type: str = Field(..., description="The triggering event type")
     document_id: str | None = Field(default=None, description="AccuLynx document ID")
     document_url: str | None = Field(default=None, description="Direct URL to fetch document bytes")
@@ -61,7 +63,9 @@ class ProcessedDocumentResult(BaseModel):
     organization_id: str
     location_id: str | None = None
     document_id: str | None = None
-    elements: list[dict[str, Any]] = Field(default_factory=list, description="Unstructured.io typed elements")
+    elements: list[dict[str, Any]] = Field(
+        default_factory=list, description="Unstructured.io typed elements"
+    )
     raw_text: str = Field(default="", description="Plain text extracted from elements")
     file_name: str | None = None
     raw_path: str | None = None

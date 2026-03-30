@@ -957,7 +957,7 @@ function Step2({
           </div>
           <div style={{ fontSize: 13, color: "var(--od-text-muted)", lineHeight: 1.6 }}>
             AccuLynx API keys are per-location. Each branch gets its own key —
-            you'll add more locations in Settings at any time.
+            you&apos;ll add more locations in Settings at any time.
           </div>
         </div>
 
@@ -994,7 +994,7 @@ function Step2({
             )}
           </button>
           <button className="od-skip-link" onClick={onSkip}>
-            Skip — I'll set up locations in Settings →
+            Skip — I&apos;ll set up locations in Settings →
           </button>
         </div>
       </div>

@@ -14,7 +14,9 @@ class AccuLynxJobEvent(BaseModel):
 
     event_type: str = Field(..., description="e.g. 'job.created', 'document.uploaded'")
     job_id: str = Field(..., description="AccuLynx job ID")
-    location_id: str = Field(..., description="AccuLynx location ID — maps to Supabase locations table")
+    location_id: str = Field(
+        ..., description="AccuLynx location ID — maps to Supabase locations table"
+    )
     timestamp: datetime = Field(..., description="When the event occurred")
     document_id: str | None = Field(default=None, description="AccuLynx document ID, if applicable")
     document_url: str | None = Field(default=None, description="Direct URL to fetch document bytes")
