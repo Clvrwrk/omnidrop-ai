@@ -4,6 +4,8 @@ import { withAuth } from "@workos-inc/authkit-nextjs";
 import { SessionProvider } from "@/components/session-provider";
 import { SignOutButton } from "@/components/sign-out-button";
 import { OpsQueueBadge } from "@/components/ops-queue-badge";
+import { FreemiumBanner } from "@/components/freemium-banner";
+import { CmdK } from "@/components/cmd-k";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -40,6 +42,8 @@ export default async function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body suppressHydrationWarning className="min-h-screen bg-gray-50">
         <SessionProvider user={sessionUser}>
+          <CmdK />
+          <FreemiumBanner />
           <nav className="border-b bg-white">
             <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
               <Link href="/dashboard" className="text-lg font-bold text-gray-900">
