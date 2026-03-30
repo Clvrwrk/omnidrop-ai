@@ -100,9 +100,48 @@ class ClaudeService:
         return result  # type: ignore[return-value]
 
     @staticmethod
-    def extract_invoice_schema(raw_text: str) -> dict[str, Any]:
+    def _build_few_shot_section(examples: list[dict]) -> str:
+        """
+        Format HITL correction examples into a prompt section.
+
+        Each example shows what a human corrected, teaching Claude the
+        org/vendor-specific patterns to apply on future extractions.
+        Returns an empty string when no examples are available.
+        """
+        if not examples:
+            return ""
+
+        lines = [
+            "LEARNING FROM PAST HUMAN CORRECTIONS:",
+            "The following corrections were made by accountants reviewing previous documents.",
+            "Apply these patterns to improve your extraction accuracy.\n",
+        ]
+        for i, ex in enumerate(examples, 1):
+            vendor = ex.get("vendor_name") or "Unknown vendor"
+            summary = ex.get("correction_summary") or ""
+            corrected = ex.get("corrected_extraction")
+            lines.append(f"Correction {i} — {vendor}:")
+            if summary:
+                lines.append(f"  Summary: {summary}")
+            if corrected:
+                lines.append(f"  Corrected values: {json.dumps(corrected, indent=2)}")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def extract_invoice_schema(
+        raw_text: str,
+        examples: list[dict] | None = None,
+    ) -> dict[str, Any]:
         """
         Extracts invoice fields with per-field confidence scores.
+
+        Args:
+            raw_text: Plain text from Unstructured.io
+            examples: Optional list of HITL correction examples from
+                      get_correction_examples() — injected as few-shot
+                      context to improve vendor/org-specific accuracy.
 
         Returns a dict with value/confidence pairs per the API contract:
         {
@@ -118,7 +157,12 @@ class ClaudeService:
         Confidence >= 0.95 on ALL fields → auto-confirm.
         Below that → triage_status = 'pending' for HITL review.
         """
-        logger.info("extract_invoice_schema called")
+        logger.info(
+            "extract_invoice_schema called",
+            extra={"example_count": len(examples) if examples else 0},
+        )
+
+        few_shot_section = ClaudeService._build_few_shot_section(examples or [])
 
         client = _get_client()
         message = client.messages.create(
@@ -132,7 +176,8 @@ class ClaudeService:
                         "Return ONLY valid JSON matching this schema exactly.\n"
                         "Include a \"confidence\" field (0.0–1.0) for each extracted value.\n"
                         "If a field cannot be found, set the value to null and confidence to 0.0.\n\n"
-                        "Schema:\n"
+                        + (few_shot_section + "\n" if few_shot_section else "")
+                        + "Schema:\n"
                         "{\n"
                         '  "vendor_name": {"value": "string", "confidence": 0.0},\n'
                         '  "invoice_number": {"value": "string", "confidence": 0.0},\n'

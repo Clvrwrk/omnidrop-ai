@@ -429,6 +429,9 @@ async def _write_context_reference_example(
     organization_id: str,
     document_id: str,
     context_score: int,
+    vendor_name: str | None = None,
+    corrected_extraction: dict | None = None,
+    correction_summary: str | None = None,
 ) -> None:
     """
     Write a context_reference_example row for confirmed/corrected documents.
@@ -436,22 +439,34 @@ async def _write_context_reference_example(
     label='high'                 — accountant confirmed the document is valid
     label_source='hitl_correction'
     rubric_score                 — from jobs.context_score (0 if absent/NULL)
+    vendor_name                  — enables vendor-scoped few-shot retrieval
+    corrected_extraction         — human-verified field values (JSONB); used for
+                                   few-shot prompting on future invoices from this vendor
+    correction_summary           — human-readable diff of what changed
     embedding                    — NULL until Phase 2 vector scoring
 
     This is fire-and-forget from the endpoint perspective: a failure here is
     logged but does NOT roll back the triage decision. The document is still
     confirmed. The example can be re-derived later if needed.
     """
+    row: dict = {
+        "organization_id": organization_id,
+        "document_id":     document_id,
+        "label":           "high",
+        "label_source":    "hitl_correction",
+        "rubric_score":    context_score,
+        # embedding: NULL — Phase 2 will populate via vector scoring task
+    }
+    if vendor_name:
+        row["vendor_name"] = vendor_name
+    if corrected_extraction:
+        row["corrected_extraction"] = corrected_extraction
+    if correction_summary:
+        row["correction_summary"] = correction_summary
+
     await (
         client.table("context_reference_examples")
-        .insert({
-            "organization_id": organization_id,
-            "document_id":     document_id,
-            "label":           "high",
-            "label_source":    "hitl_correction",
-            "rubric_score":    context_score,
-            # embedding: NULL — Phase 2 will populate via vector scoring task
-        })
+        .insert(row)
         .execute()
     )
 
@@ -487,7 +502,7 @@ async def patch_triage(
         .select(
             "document_id, organization_id, triage_status, "
             "jobs(context_score), "
-            "invoices(invoice_id)",
+            "invoices(invoice_id, vendor_name)",
         )
         .eq("document_id", document_id)
         .eq("organization_id", organization_id)
@@ -564,9 +579,27 @@ async def patch_triage(
             job = job_join
         context_score: int = int(job.get("context_score") or 0) if job else 0
 
+        # Extract vendor_name and correction data for few-shot learning
+        vendor_name: str | None = invoice.get("vendor_name") if invoice else None
+        corrected_extraction: dict | None = None
+        correction_summary: str | None = None
+
+        if body.action == "correct" and body.corrections:
+            corrected_extraction = body.corrections
+            changed_fields = [k for k in body.corrections if k != "line_items"]
+            if "line_items" in body.corrections:
+                changed_fields.append(f"line_items ({len(body.corrections['line_items'])} items)")
+            correction_summary = f"Human corrected: {', '.join(changed_fields)}" if changed_fields else None
+
         try:
             await _write_context_reference_example(
-                client, organization_id, document_id, context_score
+                client,
+                organization_id,
+                document_id,
+                context_score,
+                vendor_name=vendor_name,
+                corrected_extraction=corrected_extraction,
+                correction_summary=correction_summary,
             )
         except Exception as exc:
             # Non-fatal: log and continue — the triage decision is already committed.

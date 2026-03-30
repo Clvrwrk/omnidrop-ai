@@ -329,10 +329,33 @@ def extract_struct(self: Any, triaged_result: dict[str, Any]) -> dict[str, Any]:
     logger.info("extract_struct started", extra={"job_id": job_id})
 
     try:
+        import asyncio as _asyncio
+
+        from backend.services.supabase_client import get_correction_examples
+
         raw_text = triaged_result.get("raw_text", "")
 
-        # 1. Extract invoice fields with confidence scores
-        extraction = ClaudeService.extract_invoice_schema(raw_text)
+        # 1. Fetch HITL correction examples for few-shot prompting.
+        #    A partial vendor_name may be in triaged_result if score_context
+        #    extracted it; otherwise we fetch org-level examples as fallback.
+        vendor_hint: str | None = triaged_result.get("vendor_name")
+        try:
+            correction_examples = _asyncio.get_event_loop().run_until_complete(
+                get_correction_examples(
+                    organization_id=organization_id,
+                    vendor_name=vendor_hint,
+                    limit=5,
+                )
+            )
+        except Exception:
+            logger.warning(
+                "extract_struct: failed to fetch correction examples — proceeding without",
+                extra={"job_id": job_id},
+            )
+            correction_examples = []
+
+        # 2. Extract invoice fields with confidence scores + few-shot examples
+        extraction = ClaudeService.extract_invoice_schema(raw_text, examples=correction_examples)
 
         # 2. Determine triage status via HITL confidence check
         auto_confirm = ClaudeService.should_auto_confirm(extraction)

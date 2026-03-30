@@ -145,6 +145,63 @@ async def get_location_api_key(location_id: str) -> str:
     return result.data["acculynx_api_key"]
 
 
+async def get_correction_examples(
+    organization_id: str,
+    vendor_name: str | None = None,
+    limit: int = 5,
+) -> list[dict]:
+    """
+    Fetch recent HITL correction examples for few-shot prompting.
+
+    Prioritises vendor-specific examples (same vendor_name) when vendor_name
+    is supplied. Falls back to org-level examples if fewer than `limit` vendor
+    examples exist, so Claude always gets the most relevant context available.
+
+    Returns list of dicts with keys:
+        vendor_name, corrected_extraction, correction_summary, created_at
+    Only rows that have corrected_extraction populated are returned (i.e. rows
+    written after migration 00007 — older confirm-only rows are excluded).
+    """
+    client = await get_supabase_client()
+
+    results: list[dict] = []
+
+    # 1. Vendor-specific examples first (if vendor_name known)
+    if vendor_name:
+        r = await (
+            client.table("context_reference_examples")
+            .select("vendor_name, corrected_extraction, correction_summary, created_at")
+            .eq("organization_id", organization_id)
+            .eq("vendor_name", vendor_name)
+            .not_.is_("corrected_extraction", "null")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        results = r.data or []
+
+    # 2. Top up with org-level examples if we don't have enough
+    if len(results) < limit:
+        remaining = limit - len(results)
+        existing_vendors = {r["vendor_name"] for r in results if r.get("vendor_name")}
+        q = (
+            client.table("context_reference_examples")
+            .select("vendor_name, corrected_extraction, correction_summary, created_at")
+            .eq("organization_id", organization_id)
+            .not_.is_("corrected_extraction", "null")
+            .order("created_at", desc=True)
+            .limit(remaining + len(existing_vendors))  # fetch extra to filter dupes
+        )
+        r2 = await q.execute()
+        for row in (r2.data or []):
+            if row.get("vendor_name") not in existing_vendors:
+                results.append(row)
+            if len(results) >= limit:
+                break
+
+    return results
+
+
 async def get_system_config(key: str) -> dict | None:
     """Fetch a config value from the system_config table by key."""
     client = await get_supabase_client()
