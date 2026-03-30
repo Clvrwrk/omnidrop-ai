@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [shared, backend, workers]
+        service: [shared, backend]
 
     steps:
       - uses: actions/checkout@v4

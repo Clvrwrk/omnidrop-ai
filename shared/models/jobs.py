@@ -7,9 +7,9 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Generic, TypeVar
 
-T = TypeVar("T")
-
 from pydantic import BaseModel, Field
+
+T = TypeVar("T")
 
 
 class JobStatus(StrEnum):
