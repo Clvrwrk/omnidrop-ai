@@ -328,18 +328,83 @@ async def get_kpis(
 
 @router.get("/analytics/vendor-spend", summary="Vendor spend breakdown")
 async def get_vendor_spend(
+    request: Request,
     period: str = Query(default="30d", pattern="^(7d|30d|90d|ytd)$"),
     location_id: str | None = Query(default=None),
-    group_by: str = Query(default="vendor", pattern="^(vendor|job|month)$"),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
 ) -> dict:
-    """Returns vendor spend breakdown. Placeholder."""
-    # TODO: Aggregate from Supabase invoices/line_items tables
-    return {
-        "period": period,
-        "group_by": group_by,
-        "items": [],
-        "trend": [],
-    }
+    """
+    Vendor spend breakdown for the authenticated org.
+
+    Aggregates invoices by vendor_name, returning total_spend, invoice_count,
+    and avg_invoice_amount. All amounts are summed from invoices.total.
+
+    Scoped to organization via x-workos-org-id header. Optional location_id
+    narrows to a single branch. date_from / date_to override the period window
+    when both are supplied (ISO 8601).
+    """
+    workos_org_id = request.headers.get("x-workos-org-id")
+    if not workos_org_id:
+        raise HTTPException(status_code=401, detail="Missing x-workos-org-id header.")
+
+    workos_org_name = request.headers.get("x-workos-org-name", "")
+    org = await get_or_create_organization(workos_org_id, workos_org_name)
+    organization_id = org.get("organization_id")
+    if not organization_id:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    # Resolve date window
+    if date_from and date_to:
+        start, end = date_from, date_to
+    else:
+        start, end, _, _ = _period_bounds(period)
+
+    try:
+        client = await get_supabase_client()
+        q = (
+            client.table("invoices")
+            .select("vendor_name, total")
+            .eq("organization_id", organization_id)
+            .gte("created_at", start)
+            .lt("created_at", end)
+            .not_.is_("vendor_name", "null")
+            .not_.is_("total", "null")
+        )
+        if location_id:
+            q = q.eq("location_id", location_id)
+        r = await q.execute()
+        rows = r.data or []
+    except Exception:
+        logger.exception("get_vendor_spend failed for org %s", organization_id)
+        raise HTTPException(status_code=500, detail="Failed to retrieve vendor spend.")
+
+    # Aggregate per vendor in Python (PostgREST lacks GROUP BY)
+    agg: dict[str, dict] = {}
+    for row in rows:
+        vendor = row.get("vendor_name") or "Unknown"
+        amount = float(row.get("total") or 0.0)
+        if vendor not in agg:
+            agg[vendor] = {"vendor_name": vendor, "total_spend": 0.0, "invoice_count": 0}
+        agg[vendor]["total_spend"] += amount
+        agg[vendor]["invoice_count"] += 1
+
+    items = []
+    for v in sorted(agg.values(), key=lambda x: x["total_spend"], reverse=True):
+        count = v["invoice_count"]
+        items.append({
+            "vendor_name": v["vendor_name"],
+            "total_spend": round(v["total_spend"], 2),
+            "invoice_count": count,
+            "avg_invoice_amount": round(v["total_spend"] / count, 2) if count else 0.0,
+        })
+
+    logger.info(
+        "get_vendor_spend",
+        extra={"organization_id": organization_id, "period": period, "location_id": location_id},
+    )
+
+    return {"period": period, "location_id": location_id, "items": items}
 
 
 # ── Revenue Leakage Summary ──────────────────────────────────────────────────
@@ -365,12 +430,20 @@ def _period_cutoff(period: str) -> str:
 async def get_leakage_summary(
     request: Request,
     period: str = Query(default="30d", pattern="^(7d|30d|90d|ytd)$"),
+    location_id: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
 ) -> dict:
     """
-    Returns revenue leakage summary for the authenticated org.
+    Returns per-vendor revenue leakage summary for the authenticated org.
     Used by /dashboard/c-suite Revenue Recovery Dashboard.
 
-    Scoped to organization via x-workos-org-id header → organization_id lookup.
+    Each item in `items` contains:
+      vendor_name, total_leakage_amount, finding_count,
+      avg_leakage_per_invoice, location_id (null when org-scoped)
+
+    Scoped to organization via x-workos-org-id header. Optional location_id
+    narrows to a single branch. date_from / date_to override the period window.
     """
     workos_org_id = request.headers.get("x-workos-org-id")
     if not workos_org_id:
@@ -382,60 +455,69 @@ async def get_leakage_summary(
     if not organization_id:
         raise HTTPException(status_code=404, detail="Organization not found.")
 
-    cutoff = _period_cutoff(period)
+    # Resolve date window
+    if date_from and date_to:
+        start, end = date_from, date_to
+    else:
+        start, end, _, _ = _period_bounds(period)
 
     try:
         client = await get_supabase_client()
-
-        # Query revenue_findings joined with locations for location_name
-        findings_resp = await (
+        q = (
             client.table("revenue_findings")
-            .select(
-                "leakage_amount, vendor_name, location_id, "
-                "locations(location_name)"
-            )
+            .select("leakage_amount, vendor_name, location_id")
             .eq("organization_id", organization_id)
-            .gte("created_at", cutoff)
-            .execute()
+            .gte("created_at", start)
+            .lt("created_at", end)
         )
-
+        if location_id:
+            q = q.eq("location_id", location_id)
+        findings_resp = await q.execute()
         rows = findings_resp.data or []
-
-        total_leakage = sum(r.get("leakage_amount", 0.0) or 0.0 for r in rows)
-        finding_count = len(rows)
-
-        # Aggregate by location
-        location_agg: dict[str, dict] = {}
-        for r in rows:
-            loc = r.get("locations") or {}
-            loc_name = loc.get("location_name") or r.get("location_id") or "Unknown"
-            if loc_name not in location_agg:
-                location_agg[loc_name] = {"location_name": loc_name, "total_leakage": 0.0, "finding_count": 0}
-            location_agg[loc_name]["total_leakage"] += r.get("leakage_amount", 0.0) or 0.0
-            location_agg[loc_name]["finding_count"] += 1
-
-        # Aggregate by vendor
-        vendor_agg: dict[str, dict] = {}
-        for r in rows:
-            vendor = r.get("vendor_name") or "Unknown"
-            if vendor not in vendor_agg:
-                vendor_agg[vendor] = {"vendor_name": vendor, "total_leakage": 0.0, "finding_count": 0}
-            vendor_agg[vendor]["total_leakage"] += r.get("leakage_amount", 0.0) or 0.0
-            vendor_agg[vendor]["finding_count"] += 1
-
-        by_location = sorted(location_agg.values(), key=lambda x: x["total_leakage"], reverse=True)[:10]
-        by_vendor = sorted(vendor_agg.values(), key=lambda x: x["total_leakage"], reverse=True)[:10]
-
     except Exception:
         logger.exception("get_leakage_summary failed for org %s", organization_id)
         raise HTTPException(status_code=500, detail="Failed to retrieve leakage summary.")
 
+    # Aggregate per (vendor_name, location_id)
+    Key = tuple[str, str | None]
+    agg: dict[Key, dict] = {}
+    for r in rows:
+        vendor = r.get("vendor_name") or "Unknown"
+        loc = r.get("location_id")  # None when no location filter
+        key: Key = (vendor, loc)
+        amount = float(r.get("leakage_amount") or 0.0)
+        if key not in agg:
+            agg[key] = {
+                "vendor_name": vendor,
+                "location_id": loc,
+                "total_leakage_amount": 0.0,
+                "finding_count": 0,
+            }
+        agg[key]["total_leakage_amount"] += amount
+        agg[key]["finding_count"] += 1
+
+    items = []
+    for entry in sorted(agg.values(), key=lambda x: x["total_leakage_amount"], reverse=True):
+        count = entry["finding_count"]
+        items.append({
+            "vendor_name": entry["vendor_name"],
+            "location_id": entry["location_id"],
+            "total_leakage_amount": round(entry["total_leakage_amount"], 2),
+            "finding_count": count,
+            "avg_leakage_per_invoice": round(entry["total_leakage_amount"] / count, 2) if count else 0.0,
+        })
+
+    logger.info(
+        "get_leakage_summary",
+        extra={"organization_id": organization_id, "period": period, "location_id": location_id},
+    )
+
     return {
-        "total_leakage": total_leakage,
-        "finding_count": finding_count,
-        "by_location": by_location,
-        "by_vendor": by_vendor,
         "period": period,
+        "location_id": location_id,
+        "total_leakage_amount": round(sum(i["total_leakage_amount"] for i in items), 2),
+        "finding_count": sum(i["finding_count"] for i in items),
+        "items": items,
     }
 
 
