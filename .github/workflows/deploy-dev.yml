@@ -57,4 +57,3 @@ jobs:
           curl -s -X POST "${{ secrets.RENDER_DEPLOY_HOOK_API }}" > /dev/null
           curl -s -X POST "${{ secrets.RENDER_DEPLOY_HOOK_WORKER }}" > /dev/null
           curl -s -X POST "${{ secrets.RENDER_DEPLOY_HOOK_FRONTEND }}" > /dev/null
-        continue-on-error: true  # Don't fail if hooks aren't configured yet
