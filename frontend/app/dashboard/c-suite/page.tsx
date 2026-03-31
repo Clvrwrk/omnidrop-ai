@@ -665,7 +665,7 @@ function ChartRow({
                 index="date"
                 categories={["Invoice Value"]}
                 colors={["amber"]}
-                valueFormatter={v => usd(v, true)}
+                valueFormatter={(v: number) => usd(v, true)}
                 yAxisWidth={72}
                 showLegend={false}
                 showGridLines={false}
@@ -706,7 +706,7 @@ function ChartRow({
             <div className="tremor-override">
               <BarList
                 data={vendorBarData}
-                valueFormatter={v => usd(v, true)}
+                valueFormatter={(v: number) => usd(v, true)}
                 color="amber"
               />
             </div>
