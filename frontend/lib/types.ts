@@ -270,6 +270,9 @@ export interface CreateLocationRequest {
 
 export interface UploadPricingContractResponse {
   contract_id: string;
+  rows_inserted?: number;
+  vendors_found?: string[];
+  effective_date?: string | null;
 }
 
 export interface CreateLocationResponse {
