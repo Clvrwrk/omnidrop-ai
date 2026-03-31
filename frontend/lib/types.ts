@@ -26,7 +26,7 @@ export interface OrgUsersResponse {
 
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 
-export type JobStatus = "queued" | "processing" | "complete" | "failed";
+export type JobStatus = "queued" | "processing" | "complete" | "failed" | "bounced";
 
 export type DocumentType =
   | "invoice"
