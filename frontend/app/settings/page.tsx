@@ -901,7 +901,7 @@ function PricingTab() {
                   </div>
                 )}
               </div>
-              {result.vendors_found?.length > 0 && (
+              {(result.vendors_found?.length ?? 0) > 0 && (
                 <>
                   <div className="st-mono" style={{ fontSize: 10, color: "var(--od-text-dim)", letterSpacing: "0.08em", marginBottom: 6 }}>VENDORS INDEXED</div>
                   <div>{result.vendors_found.map(v => <span key={v} className="st-chip">{v}</span>)}</div>
